@@ -69,6 +69,21 @@
       "key": "opdSessionId",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "reviewId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "recordId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "newSlotId",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -1254,6 +1269,44 @@
               }
             }
           ]
+        },
+        {
+          "name": "Reschedule Appointment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}/reschedule",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slot_id\": \"{{newSlotId}}\",\n  \"reason\": \"Schedule conflict\"\n}"
+            },
+            "description": "Reschedules an existing appointment to a new slot. Frees the old slot and locks the new one atomically.\n\nRestrictions:\n- Only the booking patient can reschedule\n- Cannot reschedule CANCELLED, COMPLETED, or IN_PROGRESS appointments\n- New slot must be available and in the future"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Appointment rescheduled', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.status).to.equal('rescheduled');",
+                  "  console.log('New scheduled_at:', body.data.scheduled_at);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
         }
       ]
     },
@@ -1960,6 +2013,37 @@
       "name": "1️⃣1️⃣ Notifications",
       "description": "Notification preferences and delivery history.\n\nNotifications are processed asynchronously via BullMQ. In development mode they are logged to console instead of being sent.\n\nChannels: SMS (MSG91), Push (FCM), Email (SES)",
       "item": [
+        {
+          "name": "Get Notification Preferences",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/notifications/preferences",
+            "description": "Returns current notification preferences for the authenticated user. Creates defaults on first call."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Preferences returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const prefs = pm.response.json().data;",
+                  "  console.log('SMS enabled:', prefs.sms_enabled);",
+                  "  console.log('Push enabled:', prefs.push_enabled);",
+                  "  console.log('Quiet hours:', prefs.quiet_hours_start, '-', prefs.quiet_hours_end);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
         {
           "name": "Update Notification Preferences",
           "request": {
@@ -2942,6 +3026,306 @@
                   "pm.test('Scores recomputed', () => {",
                   "  pm.response.to.have.status(200);",
                   "  console.log('Updated:', pm.response.json().data?.updated, 'doctors');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣6️⃣ Reviews",
+      "description": "Doctor reviews — write and read patient reviews.\n\n**Prerequisites:**\n- Patient must have a COMPLETED appointment to write a review\n- One review per appointment (409 if already reviewed)",
+      "item": [
+        {
+          "name": "Write Review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/reviews",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"appointment_id\": \"{{appointmentId}}\",\n  \"rating\": 5,\n  \"comment\": \"Very thorough and professional. Explained everything clearly.\"\n}"
+            },
+            "description": "Submits a review for a doctor. Validates that:\n- The appointment exists and belongs to the patient\n- The appointment is COMPLETED\n- No review exists for this appointment yet"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Review created', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.rating).to.be.within(1, 5);",
+                  "  pm.collectionVariables.set('reviewId', body.data.id);",
+                  "  console.log('Review ID:', body.data.id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Doctor Reviews",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reviews?doctor_id={{doctorProfileId}}&page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reviews"
+              ],
+              "query": [
+                {
+                  "key": "doctor_id",
+                  "value": "{{doctorProfileId}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Public endpoint — returns all reviews for a given doctor, ordered by newest first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Reviews returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Total reviews:', body.meta.total);",
+                  "  if (body.data.length > 0) console.log('Latest rating:', body.data[0].rating);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "My Reviews",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/reviews/my?page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "reviews",
+                "my"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Returns all reviews written by the authenticated patient, with doctor details."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('My reviews returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log('My review count:', pm.response.json().meta.total);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣7️⃣ Health Records",
+      "description": "Patient health records — lab reports, prescriptions, imaging, etc.\n\n**Note on file upload:**\nUpload your file to cloud storage (S3, Cloudinary, etc.) first, then pass the resulting `file_url` in the request body.",
+      "item": [
+        {
+          "name": "List Health Records",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/patients/me/records?page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "patients",
+                "me",
+                "records"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Returns all health records for the authenticated patient, newest first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Records returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Total records:', body.meta.total);",
+                  "  if (body.data.length > 0) {",
+                  "    pm.collectionVariables.set('recordId', body.data[0].id);",
+                  "    console.log('Latest record:', body.data[0].title, '-', body.data[0].record_type);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Upload Health Record",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me/records",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Blood Test Report - March 2026\",\n  \"record_type\": \"lab_report\",\n  \"file_url\": \"https://storage.example.com/records/blood-test-march-2026.pdf\",\n  \"file_name\": \"blood-test-march-2026.pdf\",\n  \"file_size\": 204800,\n  \"mime_type\": \"application/pdf\",\n  \"notes\": \"Fasting blood sugar and lipid profile\",\n  \"record_date\": \"2026-03-22\"\n}"
+            },
+            "description": "Saves a health record. Upload the file to storage first and pass the URL.\n\n**record_type values:** `lab_report`, `prescription`, `imaging`, `vaccination`, `discharge`, `other`"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Record saved', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.collectionVariables.set('recordId', body.data.id);",
+                  "  console.log('Record ID:', body.data.id);",
+                  "  console.log('Type:', body.data.record_type);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Health Record by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me/records/{{recordId}}",
+            "description": "Returns a single health record. Returns 404 if it doesn't belong to the authenticated patient."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Record returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const r = pm.response.json().data;",
+                  "  console.log('Record:', r.title, '|', r.record_type, '|', r.record_date);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete Health Record",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me/records/{{recordId}}",
+            "description": "Permanently deletes the health record. Only the owner can delete it."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Record deleted', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().data.message).to.include('deleted');",
                   "});"
                 ],
                 "type": "text/javascript"
