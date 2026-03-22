@@ -73,6 +73,10 @@ export {
 export { DoctorSearchIndex }               from './doctor-search-index.model';
 export { SymptomSpecialisationMap }        from './symptom-map.model';
 
+// ── Phase 5 models ─────────────────────────────────────────────────────────────
+export { DoctorReview }                    from './review.model';
+export { HealthRecord, RecordType }        from './health-record.model';
+
 import { DoctorSearchIndex }           from './doctor-search-index.model';
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -95,6 +99,8 @@ import { NotificationLog }            from './notification-log.model';
 import { UserNotificationPreference } from './notification-preference.model';
 import { OpdSession }                 from './opd-session.model';
 import { OpdToken }                   from './opd-token.model';
+import { DoctorReview }              from './review.model';
+import { HealthRecord }              from './health-record.model';
 
 // ── User associations ─────────────────────────────────────────────────────────
 User.hasOne(PatientProfile,  { foreignKey: 'user_id', as: 'patientProfile', onDelete: 'RESTRICT' });
@@ -180,3 +186,17 @@ OpdToken.belongsTo(User,             { foreignKey: 'patient_id', as: 'patient' }
 
 Appointment.hasOne(OpdToken,       { foreignKey: 'appointment_id', as: 'opdToken' });
 OpdToken.belongsTo(Appointment,      { foreignKey: 'appointment_id', as: 'appointment' });
+
+// ── Reviews ───────────────────────────────────────────────────────────────────
+User.hasMany(DoctorReview,         { foreignKey: 'patient_id', as: 'reviews' });
+DoctorReview.belongsTo(User,         { foreignKey: 'patient_id', as: 'patient' });
+
+DoctorProfile.hasMany(DoctorReview, { foreignKey: 'doctor_id', as: 'reviews' });
+DoctorReview.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+Appointment.hasOne(DoctorReview,   { foreignKey: 'appointment_id', as: 'review' });
+DoctorReview.belongsTo(Appointment,  { foreignKey: 'appointment_id', as: 'appointment' });
+
+// ── Health Records ────────────────────────────────────────────────────────────
+User.hasMany(HealthRecord,         { foreignKey: 'patient_id', as: 'healthRecords' });
+HealthRecord.belongsTo(User,         { foreignKey: 'patient_id', as: 'patient' });

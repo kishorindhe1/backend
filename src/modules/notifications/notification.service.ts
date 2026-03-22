@@ -170,6 +170,15 @@ export async function updatePreferences(
   return ok({ message: 'Preferences updated.', preferences: pref });
 }
 
+// ── Get notification preferences ─────────────────────────────────────────────
+export async function getPreferences(userId: string): Promise<ServiceResponse<object>> {
+  const [pref] = await UserNotificationPreference.findOrCreate({
+    where:    { user_id: userId },
+    defaults: { user_id: userId },
+  });
+  return ok(pref);
+}
+
 // ── Get notification history ──────────────────────────────────────────────────
 export async function getNotificationHistory(
   userId:  string,

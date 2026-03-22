@@ -1,5 +1,6 @@
 import { PatientProfile } from '../../models';
 import { User }           from '../../models';
+import { HealthRecord, RecordType } from '../../models';
 import { issueTokenPair, storeRefreshToken } from '../auth/token.service';
 import { ProfileStatus, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { getMissingFields, getCompletionPercentage } from '../../utils/helpers';
@@ -44,6 +45,47 @@ export async function completeProfile(userId: string, input: CompleteProfileInpu
   await storeRefreshToken(user.id, tokens.refresh_token);
   logger.info('Patient profile completed', { userId });
   return ok({ profile_status: ProfileStatus.COMPLETE, completion_percentage: getCompletionPercentage(profile), new_access_token: tokens.access_token, new_refresh_token: tokens.refresh_token, expires_in: tokens.expires_in });
+}
+
+// ── Health Records ────────────────────────────────────────────────────────────
+export async function createHealthRecord(userId: string, input: {
+  title: string; record_type: RecordType; file_url: string; file_name: string;
+  file_size?: number; mime_type?: string; notes?: string; record_date?: string;
+}): Promise<ServiceResponse<object>> {
+  const record = await HealthRecord.create({
+    patient_id:  userId,
+    title:       input.title,
+    record_type: input.record_type,
+    file_url:    input.file_url,
+    file_name:   input.file_name,
+    file_size:   input.file_size ?? null,
+    mime_type:   input.mime_type ?? null,
+    notes:       input.notes    ?? null,
+    record_date: input.record_date ? new Date(input.record_date) : null,
+  });
+  return ok(record);
+}
+
+export async function getHealthRecords(userId: string, page: number, perPage: number): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const { rows, count } = await HealthRecord.findAndCountAll({
+    where:  { patient_id: userId },
+    order:  [['created_at', 'DESC']],
+    limit: perPage, offset: (page - 1) * perPage,
+  });
+  return ok({ rows, count });
+}
+
+export async function getHealthRecord(userId: string, recordId: string): Promise<ServiceResponse<object>> {
+  const record = await HealthRecord.findOne({ where: { id: recordId, patient_id: userId } });
+  if (!record) return fail('RECORD_NOT_FOUND', 'Health record not found.', 404);
+  return ok(record);
+}
+
+export async function deleteHealthRecord(userId: string, recordId: string): Promise<ServiceResponse<{ message: string }>> {
+  const record = await HealthRecord.findOne({ where: { id: recordId, patient_id: userId } });
+  if (!record) return fail('RECORD_NOT_FOUND', 'Health record not found.', 404);
+  await record.destroy();
+  return ok({ message: 'Health record deleted.' });
 }
 
 export async function updateProfile(userId: string, input: UpdateProfileInput): Promise<ServiceResponse<object>> {

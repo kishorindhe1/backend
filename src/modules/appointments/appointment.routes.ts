@@ -27,5 +27,6 @@ router.post(
 router.get('/my',        asyncHandler(AppointmentController.getMyAppointments));
 router.get('/:id',       validate(AppointmentIdSchema),     asyncHandler(AppointmentController.getAppointment));
 router.delete('/:id',    validate(CancelAppointmentSchema), asyncHandler(AppointmentController.cancelAppointment));
+router.put('/:id/reschedule', asyncHandler(AppointmentController.rescheduleAppointment));
 
 export default router;

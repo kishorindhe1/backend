@@ -27,6 +27,13 @@ export async function cancelAppointment(req: Request, res: Response): Promise<vo
   handleResult(res, result, (data) => sendSuccess(res, data));
 }
 
+export async function rescheduleAppointment(req: Request, res: Response): Promise<void> {
+  const user = req.user as JwtAccessPayload;
+  const { slot_id, reason } = req.body as { slot_id: string; reason?: string };
+  const result = await AppointmentService.rescheduleAppointment(param(req, 'id'), user.sub, slot_id, reason);
+  handleResult(res, result, (data) => sendSuccess(res, data));
+}
+
 export async function getMyAppointments(req: Request, res: Response): Promise<void> {
   const user    = req.user as JwtAccessPayload;
   const page    = parseInt(qs(req, 'page', '1'), 10);

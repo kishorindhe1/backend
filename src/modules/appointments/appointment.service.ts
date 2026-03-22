@@ -174,6 +174,74 @@ export async function cancelAppointment(
   return ok({ message: 'Appointment cancelled successfully.', refund_eligible });
 }
 
+// ── Reschedule appointment ────────────────────────────────────────────────────
+export async function rescheduleAppointment(
+  appointmentId: string,
+  patientId:     string,
+  newSlotId:     string,
+  reason?:       string,
+): Promise<ServiceResponse<object>> {
+  const appointment = await Appointment.findByPk(appointmentId);
+  if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');
+  if (appointment.patient_id !== patientId) throw ErrorFactory.forbidden('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.');
+  if ([AppointmentStatus.CANCELLED, AppointmentStatus.COMPLETED, AppointmentStatus.IN_PROGRESS].includes(appointment.status)) {
+    throw ErrorFactory.unprocessable('BOOKING_CANNOT_RESCHEDULE', 'This appointment cannot be rescheduled.');
+  }
+
+  // Lock and validate the new slot
+  const lockKey = `lock:slot:${newSlotId}`;
+  const lockVal = `${patientId}-${Date.now()}`;
+  const acquired = await redis.set(lockKey, lockVal, 'EX', RedisTTL.SLOT_LOCK, 'NX');
+  if (!acquired) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot is currently being booked. Please try another.');
+
+  try {
+    const result = await sequelize.transaction(async (t) => {
+      const newSlot = await GeneratedSlot.findOne({
+        where: { id: newSlotId, doctor_id: appointment.doctor_id, hospital_id: appointment.hospital_id },
+        lock: t.LOCK.UPDATE, transaction: t,
+      });
+      if (!newSlot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'New slot not found.');
+      if (newSlot.status !== SlotStatus.AVAILABLE) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot has already been booked.');
+      if (newSlot.slot_datetime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
+
+      // Free the old slot
+      if (appointment.slot_id) {
+        await GeneratedSlot.update(
+          { status: SlotStatus.AVAILABLE, appointment_id: null },
+          { where: { id: appointment.slot_id }, transaction: t },
+        );
+      }
+
+      // Book the new slot and update appointment
+      await newSlot.update({ status: SlotStatus.BOOKED, appointment_id: appointment.id }, { transaction: t });
+      await appointment.update({
+        slot_id:              newSlotId,
+        scheduled_at:         newSlot.slot_datetime,
+        status:               AppointmentStatus.RESCHEDULED,
+        cancellation_reason:  reason ?? null,
+      }, { transaction: t });
+
+      return appointment;
+    });
+
+    // Invalidate slot caches for both dates
+    const oldDate = appointment.scheduled_at.toISOString().split('T')[0];
+    const newDate = result.scheduled_at.toISOString().split('T')[0];
+    await redis.del(RedisKeys.availableSlots(appointment.doctor_id, oldDate));
+    if (oldDate !== newDate) await redis.del(RedisKeys.availableSlots(appointment.doctor_id, newDate));
+
+    logger.info('Appointment rescheduled', { appointmentId, newSlotId, patientId });
+    return ok({
+      appointment_id: result.id,
+      status:         result.status,
+      scheduled_at:   result.scheduled_at,
+    });
+  } finally {
+    const cur = await redis.get(lockKey);
+    if (cur === lockVal) await redis.del(lockKey);
+  }
+}
+
 // ── Get appointment ───────────────────────────────────────────────────────────
 export async function getAppointment(appointmentId: string, requesterId: string): Promise<ServiceResponse<object>> {
   const appointment = await Appointment.findByPk(appointmentId, {

@@ -1,5 +1,6 @@
-import { Router } from 'express';
+import { Router, Request, Response } from 'express';
 import * as PatientController from './patient.controller';
+import * as PatientService    from './patient.service';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { requireCompleteProfile } from '../../middlewares/profileGuard.middleware';
@@ -8,6 +9,10 @@ import {
   UpdateProfileSchema,
 } from './patient.validation';
 import { asyncHandler } from '../../utils/asyncHandler';
+import { sendSuccess, sendCreated, sendError } from '../../utils/response';
+import { JwtAccessPayload } from '../../types';
+import { RecordType } from '../../models';
+import { z } from 'zod';
 
 const router = Router();
 
@@ -42,6 +47,66 @@ router.put(
   requireCompleteProfile,       // already-complete users updating their profile
   validate(UpdateProfileSchema),
   asyncHandler(PatientController.updateProfile),
+);
+
+// ── Health Records ────────────────────────────────────────────────────────────
+const CreateRecordSchema = z.object({
+  body: z.object({
+    title:       z.string().trim().min(1).max(200),
+    record_type: z.nativeEnum(RecordType),
+    file_url:    z.string().url(),
+    file_name:   z.string().max(255),
+    file_size:   z.number().int().positive().optional(),
+    mime_type:   z.string().max(100).optional(),
+    notes:       z.string().max(1000).optional(),
+    record_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  }),
+});
+
+router.get(
+  '/me/records',
+  asyncHandler(async (req: Request, res: Response) => {
+    const user    = req.user as JwtAccessPayload;
+    const page    = parseInt(String((req.query as Record<string,string>).page    ?? '1'),  10);
+    const perPage = parseInt(String((req.query as Record<string,string>).per_page ?? '20'), 10);
+    const result  = await PatientService.getHealthRecords(user.sub, page, perPage);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    const d = result.data as { rows: object[]; count: number };
+    sendSuccess(res, d.rows, 200, { total: d.count, page, per_page: perPage, total_pages: Math.ceil(d.count / perPage) });
+  }),
+);
+
+router.post(
+  '/me/records',
+  validate(CreateRecordSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user   = req.user as JwtAccessPayload;
+    const result = await PatientService.createHealthRecord(user.sub, req.body);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendCreated(res, result.data);
+  }),
+);
+
+router.get(
+  '/me/records/:recordId',
+  asyncHandler(async (req: Request, res: Response) => {
+    const user     = req.user as JwtAccessPayload;
+    const recordId = (req.params as Record<string,string>).recordId;
+    const result   = await PatientService.getHealthRecord(user.sub, recordId);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+router.delete(
+  '/me/records/:recordId',
+  asyncHandler(async (req: Request, res: Response) => {
+    const user     = req.user as JwtAccessPayload;
+    const recordId = (req.params as Record<string,string>).recordId;
+    const result   = await PatientService.deleteHealthRecord(user.sub, recordId);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
 );
 
 export default router;

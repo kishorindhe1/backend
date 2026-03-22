@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import * as NotificationService        from './notification.service';
 import { authenticate }               from '../../middlewares/auth.middleware';
 import { validate }                   from '../../middlewares/validate.middleware';
-import { sendSuccess, sendError }      from '../../utils/response';
+import { sendSuccess, sendError, sendCreated } from '../../utils/response';
 import { JwtAccessPayload }            from '../../types';
 import { asyncHandler }               from '../../utils/asyncHandler';
 import { z }                          from 'zod';
@@ -45,6 +45,12 @@ async function getHistory(req: Request, res: Response): Promise<void> {
 const router = Router();
 router.use(authenticate);
 
+router.get ('/preferences',    asyncHandler(async (req, res) => {
+  const user   = req.user as JwtAccessPayload;
+  const result = await NotificationService.getPreferences(user.sub);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
 router.put ('/preferences',    validate(PrefsSchema), asyncHandler(updatePreferences));
 router.get ('/history',        asyncHandler(getHistory));
 

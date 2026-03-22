@@ -12,6 +12,7 @@ import notificationRoutes  from '../modules/notifications/notification.routes';
 import opdRoutes           from '../modules/opd/opd.routes';
 import searchRoutes        from '../modules/search/search.routes';
 import adminRoutes         from '../modules/admin/admin.routes';
+import reviewRoutes        from '../modules/reviews/review.routes';
 
 const router = Router();
 
@@ -44,5 +45,8 @@ router.use('/opd',           opdRoutes);
 // ── Phase 4 ───────────────────────────────────────────────────────────────────
 router.use('/search',        searchRoutes);
 router.use('/admin',         adminRoutes);
+
+// ── Phase 5 ───────────────────────────────────────────────────────────────────
+router.use('/reviews',       reviewRoutes);
 
 export default router;
