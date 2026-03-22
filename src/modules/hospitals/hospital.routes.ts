@@ -59,7 +59,11 @@ async function listHospitals(req: Request, res: Response): Promise<void> {
   const page    = parseInt(qs(req, 'page',     '1'),  10);
   const perPage = parseInt(qs(req, 'per_page', '20'), 10);
   const city    = qs(req, 'city', '') || undefined;
-  const result  = await HospitalService.listHospitals({ city, page, perPage });
+  const latRaw  = (req.query as Record<string, string>).lat;
+  const lngRaw  = (req.query as Record<string, string>).lng;
+  const lat     = latRaw  ? parseFloat(latRaw)  : undefined;
+  const lng     = lngRaw  ? parseFloat(lngRaw)  : undefined;
+  const result  = await HospitalService.listHospitals({ city, lat, lng, page, perPage });
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   const d = result.data as { rows: object[]; count: number };
   sendSuccess(res, d.rows, 200, {

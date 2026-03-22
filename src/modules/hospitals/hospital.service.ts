@@ -119,16 +119,70 @@ export async function getHospital(hospitalId: string): Promise<ServiceResponse<o
   return ok(hospital);
 }
 
+// ── Haversine distance in km ──────────────────────────────────────────────────
+function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // ── List live hospitals ───────────────────────────────────────────────────────
 export async function listHospitals(filters: {
   city?:   string;
+  lat?:    number;
+  lng?:    number;
   page:    number;
   perPage: number;
 }): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
   const { Op } = await import('sequelize');
   const where: Record<string, unknown> = { onboarding_status: OnboardingStatus.LIVE };
-  if (filters.city) where.city = { [Op.iLike]: `%${filters.city}%` };
 
+  const hasCoords = filters.lat != null && filters.lng != null;
+
+  if (!hasCoords && filters.city) {
+    // City-only filter (old behaviour)
+    where.city = { [Op.iLike]: `%${filters.city}%` };
+  }
+
+  if (hasCoords) {
+    // Fetch all live hospitals that have coordinates, compute distance in JS,
+    // sort by proximity, then paginate.
+    where.latitude  = { [Op.ne]: null };
+    where.longitude = { [Op.ne]: null };
+
+    const all = await Hospital.findAll({ where });
+
+    type HospitalWithDist = Hospital & { distance_km: number };
+    const withDist: HospitalWithDist[] = (all as HospitalWithDist[])
+      .map((h) => {
+        h.distance_km = haversineKm(
+          filters.lat!,
+          filters.lng!,
+          parseFloat(String(h.latitude)),
+          parseFloat(String(h.longitude)),
+        );
+        return h;
+      })
+      .filter((h) => h.distance_km <= 50)   // within 50 km
+      .sort((a, b) => a.distance_km - b.distance_km);
+
+    const count  = withDist.length;
+    const offset = (filters.page - 1) * filters.perPage;
+    const rows   = withDist.slice(offset, offset + filters.perPage).map((h) => ({
+      ...h.toJSON(),
+      distance_km: Math.round(h.distance_km * 10) / 10,
+    }));
+
+    return ok({ rows, count });
+  }
+
+  // Default: paginated, sorted by name
   const { rows, count } = await Hospital.findAndCountAll({
     where,
     limit:  filters.perPage,
