@@ -1,0 +1,2955 @@
+{
+  "info": {
+    "name": "Healthcare Booking API — v5.0 Final",
+    "description": "Complete production-ready API for healthcare appointment booking.\n\n## Quick Start\n1. Import this collection + create environment: Healthcare Local (baseUrl = http://localhost:3000)\n2. Run requests top-to-bottom — pre-request scripts auto-save tokens and IDs\n3. OTPs print to server console in dev mode\n\n## Phases Delivered\n- Phase 1: Auth (OTP), Patient profile\n- Phase 2: Hospitals, Doctors, Schedules, Slots, Bookings, Payments (Razorpay)\n- Phase 3: Queue management, Receptionist operations, Notifications, OPD Sessions\n- Phase 4: Search & Discovery, Admin dashboard, Cron jobs\n- Phase 5: Tests (29 passing), Swagger docs, SMS provider, bug fixes\n\n## Swagger UI\nhttp://localhost:3000/api/docs (dev mode)\n\n## Test Credentials\n| Mobile | Role |\n|--------|------|\n| 9000000001 | super_admin |\n| 9000000002 | hospital_admin |\n| 9000000003 | receptionist |\n| 9000000010 | doctor (Orthopedics) |\n| 9876543210 | patient (complete profile) |\n| 9876543212 | patient (incomplete profile) |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "profileStatus",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "hospitalId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "doctorProfileId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "scheduleId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "slotId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "appointmentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentOrderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "currentMobile",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "opdSessionId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "🔧 Setup",
+      "description": "Utility requests. Run Health Check first to confirm the server is up.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/health",
+            "description": "Confirms the server, database, and Redis are connected."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Server is healthy', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.expect(body.data.status).to.equal('healthy');",
+                  "  console.log('Phase:', body.data.phase);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣ Auth",
+      "description": "OTP-based authentication. In development, OTPs are printed to the server console.\n\n**Flow:** Request OTP → copy from console → Verify OTP → tokens saved automatically.",
+      "item": [
+        {
+          "name": "Request OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/request-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile\": \"9876543210\",\n  \"country_code\": \"+91\"\n}"
+            },
+            "description": "Sends OTP to mobile. In dev mode, OTP appears in server console logs.\n\nRate limited: 5 requests per 15 minutes per IP.\n\nChange mobile to test different users:\n- 9876543210 (complete profile)\n- 9876543212 (incomplete profile)\n- 9000000001 (super admin)\n- 9000000002 (hospital admin)"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Save mobile for reference",
+                  "const body = JSON.parse(pm.request.body.raw);",
+                  "pm.collectionVariables.set('currentMobile', body.mobile);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('OTP sent', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.expect(body.data).to.have.property('expires_in');",
+                  "  console.log('OTP requested for:', pm.collectionVariables.get('currentMobile'));",
+                  "  console.log('Check server console for OTP value (dev mode)');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/verify-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile\": \"9876543210\",\n  \"otp\": \"PASTE_OTP_FROM_CONSOLE\"\n}"
+            },
+            "description": "Verifies OTP and returns access + refresh tokens.\n\nTokens are automatically saved to collection variables:\n- accessToken\n- refreshToken\n- profileStatus\n- userId\n\nprofile_status will be 'incomplete' for new users and 9876543212."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('OTP verified — tokens saved', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.expect(body.data.tokens).to.have.property('access_token');",
+                  "",
+                  "  pm.collectionVariables.set('accessToken',   body.data.tokens.access_token);",
+                  "  pm.collectionVariables.set('refreshToken',  body.data.tokens.refresh_token);",
+                  "  pm.collectionVariables.set('profileStatus', body.data.user.profile_status);",
+                  "  pm.collectionVariables.set('userId',        body.data.user.id);",
+                  "",
+                  "  console.log('Logged in as:', body.data.user.role);",
+                  "  console.log('Profile status:', body.data.user.profile_status);",
+                  "  if (body.data.user.profile_status === 'incomplete') {",
+                  "    console.log('⚠️  Profile incomplete — run Complete Profile before booking');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/refresh-token",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}"
+            },
+            "description": "Issues a new access + refresh token pair. Old refresh token is invalidated (rotation)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Tokens rotated', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.collectionVariables.set('accessToken',  body.data.access_token);",
+                  "  pm.collectionVariables.set('refreshToken', body.data.refresh_token);",
+                  "  console.log('New access token saved');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/logout",
+            "description": "Blacklists the current access token JTI in Redis and invalidates the refresh token. Subsequent requests with the same token will return 401."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Logged out', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.collectionVariables.set('accessToken', '');",
+                  "  pm.collectionVariables.set('refreshToken', '');",
+                  "  console.log('Tokens cleared from collection variables');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP — Invalid (test 401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/verify-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile\": \"9876543210\",\n  \"otp\": \"000000\"\n}"
+            },
+            "description": "Tests the invalid OTP error response. Expects 401 with AUTH_OTP_INVALID code."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 401 for invalid OTP', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.false;",
+                  "  pm.expect(body.error.code).to.equal('AUTH_OTP_INVALID');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify OTP — Validation Error (test 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/verify-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile\": \"12345\",\n  \"otp\": \"abc\"\n}"
+            },
+            "description": "Tests Zod validation — invalid mobile format and non-numeric OTP."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 400 for invalid input', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.equal('VALIDATION_ERROR');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2️⃣ Patient Profile",
+      "description": "Patient profile management. Login as a patient first (mobile: 9876543210 for complete, 9876543212 for incomplete).",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me",
+            "description": "Returns own profile including completion percentage and missing_fields array."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Profile returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log('Profile status:', body.data.profile_status);",
+                  "  console.log('Completion:', body.data.completion_percentage + '%');",
+                  "  if (body.data.missing_fields.length) {",
+                  "    console.log('Missing fields:', body.data.missing_fields.join(', '));",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Complete Profile (first-time)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me/complete-profile",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Kishor Patil\",\n  \"date_of_birth\": \"1992-06-15\",\n  \"gender\": \"male\",\n  \"email\": \"kishor@example.com\",\n  \"blood_group\": \"B+\"\n}"
+            },
+            "description": "Fills the required fields for a new user. Returns new tokens with profile_status: 'complete'.\n\nUse this after logging in as 9876543212 (incomplete profile)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Profile completed — new tokens saved', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.expect(body.data.profile_status).to.equal('complete');",
+                  "",
+                  "  // Save new tokens — these have profile_status: 'complete' in JWT",
+                  "  pm.collectionVariables.set('accessToken',  body.data.new_access_token);",
+                  "  pm.collectionVariables.set('refreshToken', body.data.new_refresh_token);",
+                  "  pm.collectionVariables.set('profileStatus', 'complete');",
+                  "  console.log('Profile complete. New tokens saved.');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"updated@example.com\",\n  \"blood_group\": \"O+\"\n}"
+            },
+            "description": "Partial update — send only fields you want to change. Requires complete profile."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Profile updated', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().success).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Book Without Profile (test 403)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/appointments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"hospital_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"slot_id\": \"00000000-0000-0000-0000-000000000000\"\n}"
+            },
+            "description": "Login as 9876543212 (incomplete profile) first. This should return 403 PROFILE_INCOMPLETE with missing_fields and completion_url."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Only test this if profile is incomplete",
+                  "if (pm.collectionVariables.get('profileStatus') === 'incomplete') {",
+                  "  pm.test('Returns 403 PROFILE_INCOMPLETE', () => {",
+                  "    pm.response.to.have.status(403);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.error.code).to.equal('PROFILE_INCOMPLETE');",
+                  "    pm.expect(body.error).to.have.property('missing_fields');",
+                  "    pm.expect(body.error).to.have.property('completion_url');",
+                  "    console.log('Missing fields:', body.error.missing_fields);",
+                  "  });",
+                  "} else {",
+                  "  console.log('Profile is complete — test with an incomplete user (9876543212)');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3️⃣ Hospitals",
+      "description": "Hospital management. Register and manage hospitals.\n\n**Login as super admin (9000000001) for POST/PATCH endpoints.**",
+      "item": [
+        {
+          "name": "List Hospitals",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/hospitals?city=Nashik&page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "hospitals"
+              ],
+              "query": [
+                {
+                  "key": "city",
+                  "value": "Nashik",
+                  "description": "Filter by city"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Public endpoint — lists all live hospitals. Filter by city."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Hospitals listed', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  if (body.data.length > 0) {",
+                  "    pm.collectionVariables.set('hospitalId', body.data[0].id);",
+                  "    console.log('hospitalId saved:', body.data[0].id);",
+                  "    console.log('Hospital name:', body.data[0].name);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Hospital by ID",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/hospitals/{{hospitalId}}",
+            "description": "Returns full hospital details including staff list."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Hospital returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().success).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register Hospital (super admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/hospitals",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"admin_mobile\": \"9500000001\",\n  \"admin_name\": \"Rajesh Patil\",\n  \"hospital_name\": \"New Test Hospital\",\n  \"city\": \"Nashik\",\n  \"state\": \"Maharashtra\",\n  \"hospital_type\": \"clinic\"\n}"
+            },
+            "description": "Creates a new hospital and links the admin user. Requires super_admin role.\n\nLogin as 9000000001 before running this."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Hospital registered', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.collectionVariables.set('hospitalId', body.data.hospital_id);",
+                  "  console.log('New hospital ID saved:', body.data.hospital_id);",
+                  "  console.log('Onboarding status:', body.data.onboarding_status);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Onboarding Status (super admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/hospitals/{{hospitalId}}/onboarding-status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"live\"\n}"
+            },
+            "description": "Moves hospital through onboarding stages. Valid statuses:\nregistered → documents_pending → documents_submitted → verified → agreement_pending → agreement_signed → setup_in_progress → live\n\nSetting to 'live' also sets went_live_at and is_verified = true."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status updated', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('New status:', body.data.onboarding_status);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add Receptionist (hospital admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/hospitals/{{hospitalId}}/receptionists",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile\": \"9600000001\",\n  \"department\": \"OPD\"\n}"
+            },
+            "description": "Adds a receptionist to the hospital. Creates user if mobile doesn't exist. Login as hospital admin (9000000002)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Receptionist added', () => {",
+                  "  const status = pm.response.status;",
+                  "  pm.expect([200, 201]).to.include(status);",
+                  "  console.log(pm.response.json().data.message);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4️⃣ Doctors",
+      "description": "Doctor management and verification.\n\n**Login as hospital admin (9000000002) for POST, super admin (9000000001) for PATCH verify.**",
+      "item": [
+        {
+          "name": "List Doctors",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/doctors?specialization=orthopedics&city=Nashik&page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "doctors"
+              ],
+              "query": [
+                {
+                  "key": "specialization",
+                  "value": "orthopedics",
+                  "description": "Filter by specialization"
+                },
+                {
+                  "key": "city",
+                  "value": "Nashik",
+                  "description": "Filter by city"
+                },
+                {
+                  "key": "hospital_id",
+                  "value": "",
+                  "description": "Filter by hospital",
+                  "disabled": true
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Public endpoint — lists verified, active doctors. Results ordered by reliability_score DESC."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctors listed', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  if (body.data.length > 0) {",
+                  "    pm.collectionVariables.set('doctorProfileId', body.data[0].id);",
+                  "    console.log('doctorProfileId saved:', body.data[0].id);",
+                  "    console.log('Doctor:', body.data[0].full_name, '—', body.data[0].specialization);",
+                  "  } else {",
+                  "    console.log('No doctors found. Try removing filters or run Phase 2 seeder.');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Doctor Profile",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorProfileId}}",
+            "description": "Returns full doctor profile including all hospital affiliations."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log('Doctor:', body.data.full_name);",
+                  "  console.log('Verification:', body.data.verification_status);",
+                  "  if (body.data.affiliations && body.data.affiliations.length > 0) {",
+                  "    const aff = body.data.affiliations[0];",
+                  "    pm.collectionVariables.set('hospitalId', aff.hospital_id);",
+                  "    console.log('Fee: ₹' + aff.consultation_fee);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register Doctor (hospital admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/doctors",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mobile\": \"9700000001\",\n  \"full_name\": \"Dr. Vikram Desai\",\n  \"specialization\": \"dermatology\",\n  \"qualifications\": [\"MBBS\", \"MD Dermatology\"],\n  \"experience_years\": 7,\n  \"nmc_registration_number\": \"MH99999\",\n  \"gender\": \"male\",\n  \"languages_spoken\": [\"english\", \"hindi\", \"marathi\"],\n  \"consultation_fee\": 700,\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"room_number\": \"OPD-7\",\n  \"department\": \"Dermatology\"\n}"
+            },
+            "description": "Registers a new doctor and creates hospital affiliation. Doctor starts with verification_status: 'pending' — must be approved by super admin before appearing in search."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor registered', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.collectionVariables.set('doctorProfileId', body.data.doctor_profile_id);",
+                  "  console.log('Doctor profile ID saved:', body.data.doctor_profile_id);",
+                  "  console.log('Status:', body.data.verification_status, '— needs super admin approval');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Doctor — Approve (super admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorProfileId}}/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"approve\"\n}"
+            },
+            "description": "Approves a doctor after NMC verification. Doctor will now appear in search results.\n\nLogin as super admin (9000000001) before running."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor approved', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.verification_status).to.equal('approved');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Doctor — Reject (super admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/doctors/{{doctorProfileId}}/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"reject\"\n}"
+            },
+            "description": "Rejects a doctor — they will not appear in search."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor rejected', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  pm.expect(pm.response.json().data.verification_status).to.equal('rejected');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Schedule (hospital admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/doctors/schedules",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"day_of_week\": \"monday\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"13:00\",\n  \"slot_duration_minutes\": 20,\n  \"max_patients\": 12,\n  \"session_type\": \"opd\",\n  \"effective_from\": \"2025-03-17\"\n}"
+            },
+            "description": "Creates a weekly schedule entry for a doctor at a hospital. After creating schedules, run 'Generate Slots' to create actual bookable slot records."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Schedule created', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.collectionVariables.set('scheduleId', body.data.id);",
+                  "  console.log('Schedule ID saved:', body.data.id);",
+                  "  console.log('Day:', body.data.day_of_week, body.data.start_time, '-', body.data.end_time);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5️⃣ Schedules & Slots",
+      "description": "Slot generation and browsing.\n\n**Flow:** Create Schedule → Generate Slots → Browse Slots → Book Appointment",
+      "item": [
+        {
+          "name": "Generate Slots (hospital admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/schedules/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"days_ahead\": 30\n}"
+            },
+            "description": "Generates bookable slot records from the weekly schedule template for the next N days.\n\nSafe to run multiple times — uses INSERT ON CONFLICT DO NOTHING.\nReturns { generated: N, skipped: M } counts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Slots generated', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log('Generated:', body.data.generated, 'slots');",
+                  "  console.log('Skipped (already existed):', body.data.skipped);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Available Slots",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/schedules/{{doctorProfileId}}/{{hospitalId}}/slots?date=2025-03-17",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "schedules",
+                "{{doctorProfileId}}",
+                "{{hospitalId}}",
+                "slots"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2025-03-17",
+                  "description": "YYYY-MM-DD — change to a future weekday"
+                }
+              ]
+            },
+            "description": "Public endpoint — returns all available slots for a doctor on a given date.\n\nChange the date to a future weekday (Mon–Fri) that falls within the generated range.\nResults are cached in Redis for 60 seconds."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Slots returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log('Available slots:', body.data.length);",
+                  "  if (body.data.length > 0) {",
+                  "    const slot = body.data[0];",
+                  "    pm.collectionVariables.set('slotId', slot.slot_id);",
+                  "    console.log('First slot ID saved:', slot.slot_id);",
+                  "    console.log('Slot time:', slot.slot_datetime);",
+                  "  } else {",
+                  "    console.log('No slots. Either date has no schedule or all slots are booked.');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6️⃣ Appointments",
+      "description": "Booking, viewing, and cancelling appointments.\n\n**Prerequisites:**\n1. Login as a patient with complete profile (9876543210)\n2. Have a valid slotId from 'Get Available Slots'\n3. Have doctorProfileId and hospitalId saved\n\n**The booking uses 3-layer race condition protection:**\n- Redis distributed lock (SET NX EX 5)\n- Sequelize SELECT FOR UPDATE\n- UNIQUE constraint on slot_id",
+      "item": [
+        {
+          "name": "Book Appointment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/appointments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"slot_id\": \"{{slotId}}\",\n  \"notes\": \"Recurring back pain for 3 weeks\",\n  \"appointment_type\": \"online_booking\"\n}"
+            },
+            "description": "Books an appointment. Requires:\n- Complete patient profile (403 PROFILE_INCOMPLETE otherwise)\n- Valid future slot with status: available\n- Doctor affiliated with hospital\n\nOn success: returns appointment_id and consultation_fee breakdown."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Appointment booked', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.expect(body.data.status).to.equal('pending');",
+                  "  pm.expect(body.data.payment_status).to.equal('pending');",
+                  "",
+                  "  pm.collectionVariables.set('appointmentId', body.data.appointment_id);",
+                  "  console.log('appointmentId saved:', body.data.appointment_id);",
+                  "  console.log('Fee: ₹' + body.data.consultation_fee);",
+                  "  console.log('Platform fee (2%): ₹' + body.data.platform_fee);",
+                  "  console.log('Doctor payout (98%): ₹' + body.data.doctor_payout);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "My Appointments",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/appointments/my?page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "appointments",
+                "my"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "description": "Returns the authenticated patient's full appointment history, ordered by scheduled_at DESC."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Appointments returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Total appointments:', body.meta.total);",
+                  "  if (body.data.length > 0) {",
+                  "    const latest = body.data[0];",
+                  "    pm.collectionVariables.set('appointmentId', latest.id);",
+                  "    console.log('Latest:', latest.status, '—', latest.scheduled_at);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Appointment by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}",
+            "description": "Returns full appointment detail. Patients can only view their own appointments."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Appointment returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Status:', body.data.status, '| Payment:', body.data.payment_status);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel Appointment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/appointments/{{appointmentId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Personal emergency\"\n}"
+            },
+            "description": "Cancels the appointment and frees the slot back to available.\n\nReturns refund_eligible based on payment status and time until appointment."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Appointment cancelled', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log('Refund eligible:', body.data.refund_eligible);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Book Same Slot Twice (test 409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/appointments",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"slot_id\": \"{{slotId}}\"\n}"
+            },
+            "description": "Attempts to book an already-booked slot. Should return 409 SLOT_UNAVAILABLE. Run AFTER a successful booking with the same slotId."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Returns 409 for booked slot', () => {",
+                  "  pm.response.to.have.status(409);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.be.oneOf(['SLOT_UNAVAILABLE']);",
+                  "  console.log('Correct — double booking rejected');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7️⃣ Payments",
+      "description": "Payment initiation, verification, and webhook handling.\n\n**Flow:** Initiate → Razorpay Checkout (frontend) → Verify\n\nIn development, Razorpay key is a stub. The verify endpoint accepts any values but validates signature only if RAZORPAY_KEY_SECRET is set.",
+      "item": [
+        {
+          "name": "Initiate Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/payments/initiate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"appointment_id\": \"{{appointmentId}}\"\n}"
+            },
+            "description": "Creates a Razorpay order for the appointment. Returns order_id, amount, and key_id.\n\nIn production: pass order_id to Razorpay checkout on frontend.\nIn dev: stub order ID is returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Payment initiated', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  pm.collectionVariables.set('paymentOrderId', body.data.order_id);",
+                  "  console.log('Order ID saved:', body.data.order_id);",
+                  "  console.log('Amount: ₹' + body.data.amount);",
+                  "  console.log('Pass order_id to Razorpay checkout');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/payments/verify",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"razorpay_order_id\": \"{{paymentOrderId}}\",\n  \"razorpay_payment_id\": \"pay_test_123456\",\n  \"razorpay_signature\": \"test_signature_skipped_in_dev\"\n}"
+            },
+            "description": "Called after Razorpay checkout completes. Verifies HMAC-SHA256 signature, updates payment status to 'captured', and confirms the appointment.\n\nSignature check is skipped if RAZORPAY_KEY_SECRET is not set (dev mode)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Payment verified', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log(body.data.message);",
+                  "  console.log('Appointment should now be confirmed');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Razorpay Webhook — payment.captured",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-razorpay-signature",
+                "value": "test_signature"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/payments/webhook/razorpay",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_test_unique_001\",\n  \"event\": \"payment.captured\",\n  \"payload\": {\n    \"payment\": {\n      \"entity\": {\n        \"id\": \"pay_test_webhook_001\",\n        \"order_id\": \"{{paymentOrderId}}\",\n        \"amount\": 80000,\n        \"currency\": \"INR\",\n        \"status\": \"captured\"\n      }\n    }\n  }\n}"
+            },
+            "description": "Simulates Razorpay sending a payment.captured webhook.\n\nKey idempotency behavior:\n- First call: processes and returns 200\n- Second call with same 'id': returns 200 immediately without re-processing (duplicate detected)\n\nAmount is in paise (80000 = ₹800). The signature check is bypassed if RAZORPAY_WEBHOOK_SECRET is not set."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Webhook received with 200', () => {",
+                  "  // Always 200 — even on failure — to prevent Razorpay retrying",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  console.log('Response:', body.data.message);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Razorpay Webhook — Duplicate (test idempotency)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-razorpay-signature",
+                "value": "test_signature"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/payments/webhook/razorpay",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_test_unique_001\",\n  \"event\": \"payment.captured\",\n  \"payload\": {}\n}"
+            },
+            "description": "Sends the SAME event_id as the previous webhook request.\n\nShould return 200 with 'Event already processed.' — confirming idempotency is working. The appointment should NOT be double-confirmed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Duplicate webhook skipped', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.data.message).to.equal('Event already processed.');",
+                  "  console.log('✅ Idempotency working — duplicate event skipped');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8️⃣ Edge Cases & Errors",
+      "description": "Tests for authentication errors, rate limiting, and validation failures.",
+      "item": [
+        {
+          "name": "No Auth Header (test 401)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/patients/me",
+            "description": "Calls a protected endpoint without Authorization header. Expects 401 AUTH_TOKEN_MISSING."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 without auth header', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().error.code).to.equal('AUTH_TOKEN_MISSING');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid Token (test 401)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer this.is.not.a.valid.token"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/patients/me",
+            "description": "Sends a malformed JWT. Expects 401 AUTH_TOKEN_INVALID."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('401 for invalid token', () => {",
+                  "  pm.response.to.have.status(401);",
+                  "  pm.expect(pm.response.json().error.code).to.equal('AUTH_TOKEN_INVALID');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong Role (test 403)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/hospitals",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"admin_mobile\": \"9800000001\",\n  \"admin_name\": \"Test\",\n  \"hospital_name\": \"Test Hospital\",\n  \"city\": \"Mumbai\",\n  \"state\": \"Maharashtra\",\n  \"hospital_type\": \"clinic\"\n}"
+            },
+            "description": "Login as a patient and try to register a hospital. Expects 403 AUTH_INSUFFICIENT_PERMISSIONS — only super_admin can register hospitals."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('403 for wrong role', () => {",
+                  "  pm.response.to.have.status(403);",
+                  "  pm.expect(pm.response.json().error.code).to.equal('AUTH_INSUFFICIENT_PERMISSIONS');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid UUID Param (test 400)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/doctors/not-a-valid-uuid",
+            "description": "Passes a non-UUID string as a doctor ID. Expects 400 VALIDATION_ERROR."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 for invalid UUID', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().error.code).to.equal('VALIDATION_ERROR');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Route Not Found (test 404)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/api/v1/this-route-does-not-exist",
+            "description": "Requests a non-existent route. Expects 404 ROUTE_NOT_FOUND."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('404 for missing route', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "  pm.expect(pm.response.json().error.code).to.equal('ROUTE_NOT_FOUND');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing Required Field (test 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/request-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "description": "Sends an empty body to request-otp. Expects 400 VALIDATION_ERROR with details about missing mobile field."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('400 for missing field', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.error.code).to.equal('VALIDATION_ERROR');",
+                  "  pm.expect(body.error).to.have.property('details');",
+                  "  console.log('Validation details:', JSON.stringify(body.error.details));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9️⃣ Queue",
+      "description": "Real-time queue position and wait time estimation.\n\n**Flow:** Book appointment → appointment added to queue → Patient polls queue status → Receptionist calls next.\n\nQueue position is cached in Redis (20s TTL). Estimates use rolling average consultation time and historical no-show rates.",
+      "item": [
+        {
+          "name": "Get Queue Status (patient)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/queue/status/{{appointmentId}}",
+            "description": "Returns patient's real-time queue position, estimated wait, and delay info.\n\nResponse includes:\n- patients_ahead: effective count (accounts for no-shows)\n- estimated_wait_minutes: includes break buffer every 60 patients\n- cancel_refund_percentage: 0/50/100 based on delay duration\n- doctor_status: available | in_consultation | delayed"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Queue status returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.be.true;",
+                  "  const d = body.data;",
+                  "  console.log('Queue position:', d.queue_position);",
+                  "  console.log('Patients ahead:', d.patients_ahead);",
+                  "  console.log('Est. wait:', d.estimated_wait_minutes, 'min');",
+                  "  console.log('Doctor status:', d.doctor_status);",
+                  "  console.log('Refund eligible:', d.cancel_refund_percentage + '%');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Doctor Day Queue (receptionist)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/queue/{{doctorProfileId}}/{{hospitalId}}?date=2025-03-17",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "queue",
+                "{{doctorProfileId}}",
+                "{{hospitalId}}"
+              ],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2025-03-17"
+                }
+              ]
+            },
+            "description": "Full day queue for a doctor — all patients in order.\n\nChange date to today's date. Login as receptionist (9000000003)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Day queue returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Patients in queue:', body.data.length);",
+                  "  body.data.forEach(e => console.log(`  #${e.queue_position} — ${e.status}`));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🔟 Receptionist",
+      "description": "Front-desk queue management. All routes require receptionist, hospital_admin, or super_admin role.\n\n**Login as receptionist (9000000003) before running these.**\n\n**Daily workflow:**\n1. Doctor Check-In when doctor arrives\n2. Mark Patient Arrived as patients come to clinic\n3. Call Next to advance queue\n4. Start Consultation when doctor begins\n5. (repeat Call Next → Start Consultation)\n6. Book Walk-In for unregistered patients",
+      "item": [
+        {
+          "name": "Doctor Check-In",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/doctors/{{doctorProfileId}}/{{hospitalId}}/check-in",
+            "description": "Marks doctor as arrived. Resolves any active delay event for today."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor checked in', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log(pm.response.json().data.message);",
+                  "  console.log('Checked in at:', pm.response.json().data.checked_in_at);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Report Doctor Delay",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/doctors/{{doctorProfileId}}/{{hospitalId}}/delay",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"delay_minutes\": 30,\n  \"reason\": \"Stuck in traffic on Mumbai-Nashik highway\"\n}"
+            },
+            "description": "Reports doctor running late. Creates DoctorDelayEvent record.\n\nThis triggers:\n- Queue estimates to increase by delay_minutes\n- Affected patients shown 'cancel & refund' option if delay > 30 min\n- Cache invalidation for this doctor's queue"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Delay reported', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log('Delay:', d.delay_minutes, 'min');",
+                  "  console.log('Affected patients:', d.affected_patients);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Doctor Absent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/doctors/{{doctorProfileId}}/{{hospitalId}}/absent",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Doctor is unwell and unable to attend today\"\n}"
+            },
+            "description": "Marks doctor as absent for the day.\n\nThis triggers:\n- All today's PENDING and CONFIRMED appointments cancelled\n- All captured payments marked as REFUND_PENDING\n- Slots freed back to AVAILABLE\n\n⚠️ This is irreversible for today's appointments."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor marked absent', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log(d.message);",
+                  "  console.log('Cancelled:', d.cancelled_count, 'appointments');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Patient Arrived",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/appointments/{{appointmentId}}/arrived",
+            "description": "Marks patient as physically present at the clinic. Sets arrived_at timestamp.\n\nRequired before the doctor can call the patient in."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Patient arrived', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log(d.message);",
+                  "  console.log('Queue position:', d.queue_position);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Call Next Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/doctors/{{doctorProfileId}}/{{hospitalId}}/call-next",
+            "description": "Calls the next arrived patient.\n\nAutomatically:\n- Completes the current in-progress consultation\n- Updates rolling average consultation time on doctor profile\n- Advances queue position\n- Returns next patient's appointment_id"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Next patient called', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log(d.message);",
+                  "  if (d.queue_position) console.log('Token called:', d.queue_position);",
+                  "  if (d.queue_empty) console.log('✅ Queue is empty for today');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Start Consultation",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/appointments/{{appointmentId}}/start",
+            "description": "Marks consultation as started. Sets actual_start_at timestamp.\n\nChanges appointment status to IN_PROGRESS."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Consultation started', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log(pm.response.json().data.message);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Skip Patient",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/appointments/{{appointmentId}}/skip",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Patient not present when called\"\n}"
+            },
+            "description": "Marks patient as skipped (not present when token called). Shifts queue position count for others."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Patient skipped', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log(pm.response.json().data.message);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Book Walk-In",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/receptionist/walk-in",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"patient_mobile\": \"9888888888\"\n}"
+            },
+            "description": "Books a walk-in patient directly. Creates user if mobile not found.\n\nWalk-ins:\n- Payment mode: cash (collected at reception)\n- Appointment type: walk_in\n- Added to queue with arrived_at set immediately\n- 2% platform fee still calculated for reconciliation"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Walk-in booked', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const d = pm.response.json().data;",
+                  "  pm.collectionVariables.set('appointmentId', d.appointment_id);",
+                  "  console.log('Token #' + d.queue_position);",
+                  "  console.log('Appointment ID saved:', d.appointment_id);",
+                  "  console.log('Fee: ₹' + d.fee);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣1️⃣ Notifications",
+      "description": "Notification preferences and delivery history.\n\nNotifications are processed asynchronously via BullMQ. In development mode they are logged to console instead of being sent.\n\nChannels: SMS (MSG91), Push (FCM), Email (SES)",
+      "item": [
+        {
+          "name": "Update Notification Preferences",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/notifications/preferences",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sms_enabled\": true,\n  \"push_enabled\": true,\n  \"email_enabled\": false,\n  \"booking_reminders\": true,\n  \"delay_alerts\": true,\n  \"queue_position_alerts\": true,\n  \"quiet_hours_enabled\": true,\n  \"quiet_hours_start\": \"22:00\",\n  \"quiet_hours_end\": \"07:00\",\n  \"queue_notify_at_position\": 2,\n  \"reminder_lead_time_hours\": 2\n}"
+            },
+            "description": "Updates notification preferences for the authenticated user.\n\nKey settings:\n- quiet_hours: notifications suppressed during this window (except critical)\n- queue_notify_at_position: get alerted when this many patients are ahead\n- reminder_lead_time_hours: appointment reminder sent N hours before"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Preferences updated', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log('Quiet hours:', pm.response.json().data.preferences?.quiet_hours_start, '-', pm.response.json().data.preferences?.quiet_hours_end);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Notification History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/notifications/history?page=1&per_page=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "notifications",
+                "history"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Full notification delivery history for the authenticated user.\n\nEach record shows: channel, type, status, attempt_count, delivered_at."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('History returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Total notifications:', body.meta.total);",
+                  "  if (body.data.length > 0) {",
+                  "    const latest = body.data[0];",
+                  "    console.log('Latest:', latest.notification_type, '—', latest.status, '—', latest.channel);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣2️⃣ OPD Sessions (High-Volume)",
+      "description": "Token-based OPD for high-volume doctors (100–500 patients/day).\n\n**When to use:** Doctors with max_patients_per_day > 40 or where 20-min slot booking is impractical.\n\n**Flow:**\n1. Create Session (hospital admin)\n2. Activate Session (receptionist, when doctor arrives)\n3. Issue Walk-in Tokens at reception\n4. Patients book Online Tokens via app\n5. Call Next Token as doctor finishes each patient\n6. Monitor via Session Stats\n\n**Token issuance is atomic** (Redis lock prevents double-issuing same token number).",
+      "item": [
+        {
+          "name": "Create OPD Session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/opd",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"session_date\": \"2025-03-18\",\n  \"session_type\": \"morning\",\n  \"start_time\": \"09:00\",\n  \"expected_end_time\": \"13:00\",\n  \"total_tokens\": 120,\n  \"online_token_limit\": 60,\n  \"walkin_token_limit\": 60\n}"
+            },
+            "description": "Creates a token-based OPD session.\n\ntotal_tokens = online_token_limit + walkin_token_limit\n\nFor a 4-hour session at 2 min/patient:\n  4h × 30 patients/hr = 120 tokens max"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('OPD session created', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  const d = pm.response.json().data;",
+                  "  pm.collectionVariables.set('opdSessionId', d.id);",
+                  "  console.log('Session ID saved:', d.id);",
+                  "  console.log('Total tokens:', d.total_tokens);",
+                  "  console.log('Status:', d.status);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activate Session",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/opd/{{opdSessionId}}/activate",
+            "description": "Activates the session when doctor arrives and is ready to see patients.\n\nRecords actual_start_time. Session status: scheduled → active."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Session activated', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log('Status:', d.status);",
+                  "  console.log('Actual start:', d.actual_start_time);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Issue Walk-in Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/opd/{{opdSessionId}}/walkin-token",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_mobile\": \"9777777777\"\n}"
+            },
+            "description": "Issues a walk-in token. patient_mobile is optional — omit for anonymous walk-ins.\n\nWalk-in tokens start with arrived status immediately."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Walk-in token issued', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  console.log('Token #' + pm.response.json().data.token_number);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Call Next Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/opd/{{opdSessionId}}/call-next",
+            "description": "Calls the next token.\n\n- Marks current in-progress token as COMPLETED\n- Updates session's rolling average consultation time\n- Returns next token number\n- When all patients seen, session auto-completes"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Next token called', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  if (d.session_completed) {",
+                  "    console.log('✅ Session completed');",
+                  "  } else {",
+                  "    console.log('Token #' + d.token_number + ' called');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Session Live Stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/opd/{{opdSessionId}}/stats",
+            "description": "Returns live session statistics.\n\nShows: current_token, tokens_issued, completed, waiting, skipped, estimated_end_time, avg_time_per_patient"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Stats returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log('Status:', d.status);",
+                  "  console.log('Current token:', d.current_token, '/', d.tokens_issued);",
+                  "  console.log('Completed:', d.tokens_completed, '| Waiting:', d.tokens_waiting);",
+                  "  console.log('Avg time/patient:', d.avg_time_per_patient, 'min');",
+                  "  console.log('Est. end time:', d.estimated_end_time);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣3️⃣ Search & Discovery",
+      "description": "Patient-facing search. No auth required.\n\nFeatures:\n- Symptom-to-specialisation mapping (e.g. \"knee pain\" → orthopedics)\n- Autocomplete with doctor names + specialisations\n- Distance-based ranking when lat/lng provided\n- Wilson score ratings (penalises low review count)\n- Availability-weighted results",
+      "item": [
+        {
+          "name": "Autocomplete",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/autocomplete?q=Dr.+Priya&city=Nashik",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search",
+                "autocomplete"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "Dr. Priya"
+                },
+                {
+                  "key": "city",
+                  "value": "Nashik"
+                }
+              ]
+            },
+            "description": "Type-ahead suggestions. Returns doctor names AND matching specialisations.\n\nTry:\n- \"knee\" → maps to orthopedics\n- \"Dr. S\" → doctor name match\n- \"cardio\" → cardiology specialisation"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Autocomplete returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Suggestions:', body.data.length);",
+                  "  body.data.forEach(s => console.log(' ', s.type, '—', s.display));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search — by symptom (smart)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/doctors?q=knee+pain&city=Nashik&available_today=false&page=1&per_page=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search",
+                "doctors"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "knee pain"
+                },
+                {
+                  "key": "city",
+                  "value": "Nashik"
+                },
+                {
+                  "key": "available_today",
+                  "value": "false"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "per_page",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Smart search maps symptoms to specialisations.\n\nResponse includes query_interpretation showing what was detected."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Search returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const body = pm.response.json();",
+                  "  const qi = body.data?.query_interpretation || {};",
+                  "  console.log('Mapped specialisations:', qi.mapped_specialisations);",
+                  "  console.log('Results:', body.meta?.total);",
+                  "  if (body.data?.results?.length) {",
+                  "    const r = body.data.results[0];",
+                  "    pm.collectionVariables.set('doctorProfileId', r.doctor_id);",
+                  "    pm.collectionVariables.set('hospitalId', r.hospital_id);",
+                  "    console.log('First result:', r.name, '— ₹' + r.consultation_fee);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search — by specialisation + filters",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/doctors?specialization=orthopedics&city=Nashik&max_fee=1000&sort=reliability&page=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search",
+                "doctors"
+              ],
+              "query": [
+                {
+                  "key": "specialization",
+                  "value": "orthopedics"
+                },
+                {
+                  "key": "city",
+                  "value": "Nashik"
+                },
+                {
+                  "key": "max_fee",
+                  "value": "1000"
+                },
+                {
+                  "key": "sort",
+                  "value": "reliability"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Filter by specialisation, fee cap, sort by reliability score."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Filtered search returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log('Total:', pm.response.json().meta?.total);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search — with location (distance ranking)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/search/doctors?city=Nashik&lat=20.0059&lng=73.7897&sort=distance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "search",
+                "doctors"
+              ],
+              "query": [
+                {
+                  "key": "city",
+                  "value": "Nashik"
+                },
+                {
+                  "key": "lat",
+                  "value": "20.0059"
+                },
+                {
+                  "key": "lng",
+                  "value": "73.7897"
+                },
+                {
+                  "key": "sort",
+                  "value": "distance"
+                }
+              ]
+            },
+            "description": "Distance ranking via Haversine formula. Returns distance_km per doctor."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Distance search returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const r = pm.response.json().data?.results?.[0];",
+                  "  if (r) console.log('Nearest:', r.name, r.distance_km + 'km');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rebuild Search Index (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/search/rebuild",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "description": "Rebuilds the full search index from live data.\n\nFor single doctor: { \"doctor_id\": \"uuid\", \"hospital_id\": \"uuid\" }\n\nLogin as super_admin or hospital_admin."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Index rebuilt', () => {",
+                  "  const status = pm.response.status;",
+                  "  pm.expect([200, 201]).to.include(status);",
+                  "  const body = pm.response.json();",
+                  "  console.log('Updated:', body.data?.updated, '| Errors:', body.data?.errors);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣4️⃣ Admin",
+      "description": "Platform administration. Requires hospital_admin or super_admin role.\n\n**Login as super admin (9000000001) for full access.**",
+      "item": [
+        {
+          "name": "Platform Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/dashboard",
+            "description": "Live platform health snapshot.\n\nReads from Redis live counters (no DB aggregation).\nReturns: bookings today, cancellations, live patients in queue, SMS delivery rate, payment success rate."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Dashboard returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log('Bookings today:', d.today_snapshot?.bookings);",
+                  "  console.log('Patients in queue:', d.live?.patients_in_queue);",
+                  "  console.log('SMS delivery:', d.system_health?.sms_delivery_rate_pct + '%');",
+                  "  console.log('Payment success:', d.system_health?.payment_success_rate_pct + '%');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Operations Alerts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/alerts",
+            "description": "Active operational alerts requiring attention.\n\nAlert types:\n- doctor_delay: doctor running late today\n- long_wait: patients waiting > 60 min\n- notification_failures: messages that hit max retries\n- pending_verification: hospitals awaiting document review > 2 days"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Alerts returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const alerts = pm.response.json().data;",
+                  "  console.log('Active alerts:', alerts.length);",
+                  "  alerts.forEach(a => console.log(' [' + a.priority + ']', a.message));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Financial Summary — Today",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/financial?period=today",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "financial"
+              ],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "today"
+                }
+              ]
+            },
+            "description": "Revenue breakdown.\n\nperiod: today | week | month\n\nReturns: GMV, platform_revenue (2%), doctor_payouts (98%), take_rate_pct, refund_count"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Financial summary returned', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const d = pm.response.json().data;",
+                  "  console.log('GMV: ₹' + d.gmv);",
+                  "  console.log('Platform revenue: ₹' + d.platform_revenue);",
+                  "  console.log('Take rate:', d.take_rate_pct + '%');",
+                  "  console.log('Transactions:', d.total_transactions);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Financial Summary — Month",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/financial?period=month",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "financial"
+              ],
+              "query": [
+                {
+                  "key": "period",
+                  "value": "month"
+                }
+              ]
+            },
+            "description": "Current month revenue summary."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Monthly summary returned', () => { pm.response.to.have.status(200); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "List All Doctors (admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/admin/doctors?verification_status=pending&page=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "doctors"
+              ],
+              "query": [
+                {
+                  "key": "verification_status",
+                  "value": "pending"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Admin doctor list with filters.\n\nverification_status: pending | approved | rejected"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Admin doctor list', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log('Pending doctors:', pm.response.json().meta?.total);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Suspend Doctor (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/doctors/{{doctorProfileId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"suspend\"\n}"
+            },
+            "description": "Suspends doctor account. They cannot log in until reactivated."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor suspended', () => { pm.response.to.have.status(200); console.log(pm.response.json().data.message); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reactivate Doctor (admin)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/doctors/{{doctorProfileId}}/status",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"reactivate\"\n}"
+            },
+            "description": "Reactivates a suspended doctor."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Doctor reactivated', () => { pm.response.to.have.status(200); });"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recompute Reliability Scores (admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/reliability/recompute",
+            "description": "Manually triggers reliability score computation for all active verified doctors.\n\nNormally run nightly by cron job. Useful after bulk data changes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Scores recomputed', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log('Updated doctors:', pm.response.json().data?.updated);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1️⃣5️⃣ Docs & Utilities",
+      "description": "API documentation and utility endpoints. No auth required.",
+      "item": [
+        {
+          "name": "API Docs (Swagger UI)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/../docs",
+            "description": "Opens the Swagger UI.\n\nOnly available in development mode or when SWAGGER_ENABLED=true.\n\nYou can also use this to download the raw OpenAPI spec:\n  GET http://localhost:3000/api/docs.json"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Swagger UI accessible', () => {",
+                  "  // Only runs in dev mode",
+                  "  if (pm.response.status === 200) {",
+                  "    console.log('Swagger UI is up');",
+                  "  } else {",
+                  "    console.log('Swagger not available (production mode)');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "OpenAPI Spec (JSON)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/../docs.json",
+            "description": "Raw OpenAPI 3.0 JSON spec. Import into Insomnia, Stoplight, or Postman."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Spec returned', () => {",
+                  "  if (pm.response.status === 200) {",
+                  "    const spec = pm.response.json();",
+                  "    console.log('API version:', spec.info?.version);",
+                  "    console.log('Paths:', Object.keys(spec.paths || {}).length);",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trigger Slot Generation (cron manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/schedules/generate",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"doctor_id\": \"{{doctorProfileId}}\",\n  \"hospital_id\": \"{{hospitalId}}\",\n  \"days_ahead\": 30\n}"
+            },
+            "description": "Manually trigger slot generation for a doctor. Normally runs automatically at 2:30 AM IST via cron.\n\nLogin as hospital_admin (9000000002) before running."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Slots generated', () => {",
+                  "  pm.response.to.have.status(201);",
+                  "  console.log('Generated:', pm.response.json().data?.generated, 'slots');",
+                  "  console.log('Skipped (existed):', pm.response.json().data?.skipped);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trigger Search Index Rebuild (cron manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/search/rebuild",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "description": "Manually trigger a full search index rebuild. Normally runs at 2:35 AM IST.\n\nLogin as super_admin or hospital_admin."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Index rebuilt', () => {",
+                  "  const s = pm.response.status;",
+                  "  pm.expect([200, 201]).to.include(s);",
+                  "  console.log('Updated:', pm.response.json().data?.updated);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trigger Reliability Recompute (cron manual)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/admin/reliability/recompute",
+            "description": "Recompute reliability scores for all active doctors. Normally runs at 2:40 AM IST.\n\nLogin as super_admin."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Scores recomputed', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  console.log('Updated:', pm.response.json().data?.updated, 'doctors');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

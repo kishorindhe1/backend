@@ -1,0 +1,109 @@
+version: '3.9'
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: healthcare_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DB_NAME}
+      POSTGRES_USER:     ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+      interval: 5s
+      timeout:  5s
+      retries:  10
+      start_period: 10s
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: healthcare_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout:  3s
+      retries:  10
+      start_period: 5s
+
+  # ── API ─────────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: healthcare_api
+    restart: unless-stopped
+    ports:
+      - '${PORT:-3000}:3000'
+    environment:
+      NODE_ENV:              development
+      PORT:                  3000
+      DB_HOST:               postgres         # service name = hostname inside Docker network
+      DB_PORT:               5432
+      DB_NAME:               ${DB_NAME}
+      DB_USER:               ${DB_USER}
+      DB_PASSWORD:           ${DB_PASSWORD}
+      REDIS_HOST:            redis
+      REDIS_PORT:            6379
+      JWT_ACCESS_SECRET:     ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET:    ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      OTP_EXPIRY_MINUTES:    10
+      OTP_MAX_ATTEMPTS:      5
+      BCRYPT_ROUNDS:         12
+    depends_on:
+      postgres:
+        condition: service_healthy    # wait for postgres health check
+      redis:
+        condition: service_healthy    # wait for redis health check
+    volumes:
+      - ./logs:/app/logs              # persist logs outside container
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/v1/health || exit 1']
+      interval: 10s
+      timeout:  5s
+      retries:  5
+      start_period: 20s
+
+  # ── pgAdmin (dev only — remove from production) ─────────────────────────────
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: healthcare_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL:    admin@healthcare.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - '5050:80'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - dev                           # only starts with: docker compose --profile dev up
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: healthcare_network
