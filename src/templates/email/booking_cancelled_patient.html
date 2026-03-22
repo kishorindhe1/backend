@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Appointment Cancelled — Upcharify</title>
+</head>
+<body style="margin:0;padding:0;background:#F8FAFC;font-family:'Segoe UI',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F8FAFC;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#00C8A0 0%,#0891B2 100%);padding:32px 40px;text-align:center;">
+              <span style="font-size:28px;font-weight:900;color:#FFFFFF;letter-spacing:-0.5px;">Upcharify</span>
+              <p style="margin:4px 0 0;color:rgba(255,255,255,0.8);font-size:13px;">Your Health, Our Priority</p>
+            </td>
+          </tr>
+
+          <!-- Status banner -->
+          <tr>
+            <td style="background:#EF4444;padding:16px 40px;text-align:center;">
+              <p style="margin:0;color:#FFFFFF;font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">✕ Appointment Cancelled</p>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px;">
+              <h1 style="margin:0 0 8px;font-size:22px;font-weight:800;color:#1E293B;">Hi {{name}},</h1>
+              <p style="margin:0 0 32px;color:#64748B;font-size:15px;line-height:1.6;">Your appointment has been cancelled as requested. Here's a summary:</p>
+
+              <!-- Cancelled appointment card -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:#FFF5F5;border:1px solid #FECACA;border-radius:12px;overflow:hidden;">
+                <tr>
+                  <td style="padding:20px 24px;border-bottom:1px solid #FECACA;">
+                    <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:1.5px;color:#94A3B8;text-transform:uppercase;">Doctor</p>
+                    <p style="margin:0;font-size:16px;font-weight:700;color:#1E293B;">Dr. {{doctor}}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:20px 24px;">
+                    <p style="margin:0 0 2px;font-size:11px;font-weight:700;letter-spacing:1.5px;color:#94A3B8;text-transform:uppercase;">Date</p>
+                    <p style="margin:0;font-size:15px;font-weight:600;color:#64748B;text-decoration:line-through;">{{date}}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Rebook CTA -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:32px;">
+                <tr>
+                  <td align="center">
+                    <a href="#" style="display:inline-block;background:linear-gradient(135deg,#00C8A0,#0891B2);color:#FFFFFF;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:10px;">Book a New Appointment</a>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="margin:32px 0 0;color:#64748B;font-size:14px;line-height:1.6;">If you cancelled by mistake or need to reschedule, open the Upcharify app to book a new slot with the same or a different doctor.</p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#F8FAFC;border-top:1px solid #E2E8F0;padding:24px 40px;text-align:center;">
+              <p style="margin:0 0 8px;color:#64748B;font-size:12px;">Need help? <a href="mailto:support@upcharify.com" style="color:#00C8A0;text-decoration:none;">support@upcharify.com</a></p>
+              <p style="margin:0;color:#94A3B8;font-size:11px;">© 2026 Upcharify · Nashik, Maharashtra · <a href="#" style="color:#94A3B8;">Unsubscribe</a></p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
