@@ -3,13 +3,17 @@ import { sequelize }                    from '../../config/database';
 import { redis }                        from '../../config/redis';
 import {
   User,
+  PatientProfile,
   DoctorProfile, VerificationStatus,
   Hospital, OnboardingStatus,
+  HospitalStaff,
+  DoctorHospitalAffiliation,
   Appointment, AppointmentStatus, PaymentStatus,
   Payment, PaymentGatewayStatus,
   ConsultationQueue, QueueStatus,
   DoctorDelayEvent, DelayStatus,
   NotificationLog, NotificationStatus,
+  AdminAuditLog, AdminAction,
 }                                       from '../../models';
 import { UserRole, AccountStatus } from '../../types';
 import { ErrorFactory }                 from '../../utils/errors';
@@ -213,6 +217,15 @@ export async function toggleDoctorStatus(
   await user.update({ account_status: newStatus });
   await doctor.update({ is_active: action === 'reactivate' });
 
+  await AdminAuditLog.create({
+    admin_id:      adminId,
+    action:        action === 'suspend' ? AdminAction.DOCTOR_SUSPENDED : AdminAction.DOCTOR_REACTIVATED,
+    resource_type: 'doctor',
+    resource_id:   doctorProfileId,
+    meta:          { account_status: newStatus },
+    ip_address:    null,
+  });
+
   logger.info(`Doctor ${action}d`, { doctorProfileId, adminId });
   return ok({ message: `Doctor ${action}d successfully.`, account_status: newStatus });
 }
@@ -270,6 +283,290 @@ async function computeSingleDoctorScore(doctorId: string): Promise<void> {
     { reliability_score: score, on_time_rate: onTimeRate, cancellation_rate: cancelRate, completion_rate: completionRate },
     { where: { id: doctorId } },
   );
+}
+
+// ── Verify / reject doctor ────────────────────────────────────────────────────
+export async function verifyDoctor(
+  doctorProfileId: string,
+  action:          'approve' | 'reject',
+  adminId:         string,
+  notes?:          string,
+): Promise<ServiceResponse<object>> {
+  const doctor = await DoctorProfile.findByPk(doctorProfileId);
+  if (!doctor) throw ErrorFactory.notFound('DOCTOR_NOT_FOUND', 'Doctor not found.');
+
+  const newStatus = action === 'approve' ? VerificationStatus.APPROVED : VerificationStatus.REJECTED;
+  await doctor.update({
+    verification_status: newStatus,
+    verified_by:         adminId,
+    verified_at:         new Date(),
+    ...(action === 'approve' ? { is_active: true } : {}),
+  });
+
+  await AdminAuditLog.create({
+    admin_id:      adminId,
+    action:        action === 'approve' ? AdminAction.DOCTOR_VERIFIED : AdminAction.DOCTOR_REJECTED,
+    resource_type: 'doctor',
+    resource_id:   doctorProfileId,
+    meta:          { verification_status: newStatus, notes: notes ?? null },
+    ip_address:    null,
+  });
+
+  logger.info(`Doctor verification ${action}d`, { doctorProfileId, adminId });
+  return ok({ message: `Doctor ${action}d successfully.`, verification_status: newStatus });
+}
+
+// ── List hospitals ─────────────────────────────────────────────────────────────
+export async function listHospitals(filters: {
+  onboarding_status?: string;
+  city?:              string;
+  page:               number;
+  perPage:            number;
+}): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const where: Record<string, unknown> = {};
+  if (filters.onboarding_status) where.onboarding_status = filters.onboarding_status;
+  if (filters.city) where.city = filters.city;
+
+  const { rows, count } = await Hospital.findAndCountAll({
+    where,
+    order: [['created_at', 'DESC']],
+    limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+  });
+  return ok({ rows, count });
+}
+
+// ── Hospital detail ───────────────────────────────────────────────────────────
+export async function getHospitalDetail(hospitalId: string): Promise<ServiceResponse<object>> {
+  const hospital = await Hospital.findByPk(hospitalId);
+  if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
+
+  const [doctorCount, staffCount, appointmentCount] = await Promise.all([
+    DoctorHospitalAffiliation.count({ where: { hospital_id: hospitalId, is_active: true } }),
+    HospitalStaff.count({ where: { hospital_id: hospitalId, is_active: true } }),
+    Appointment.count({ where: { hospital_id: hospitalId } }),
+  ]);
+
+  return ok({ ...hospital.toJSON(), stats: { active_doctors: doctorCount, active_staff: staffCount, total_appointments: appointmentCount } });
+}
+
+// ── Update hospital status (suspend / activate) ───────────────────────────────
+export async function updateHospitalStatus(
+  hospitalId: string,
+  action:     'suspend' | 'activate',
+  adminId:    string,
+  reason?:    string,
+): Promise<ServiceResponse<object>> {
+  const hospital = await Hospital.findByPk(hospitalId);
+  if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
+
+  const newStatus = action === 'suspend' ? OnboardingStatus.SUSPENDED : OnboardingStatus.LIVE;
+  await hospital.update({
+    onboarding_status: newStatus,
+    ...(action === 'suspend'
+      ? { suspended_at: new Date(), suspension_reason: reason ?? null }
+      : { suspended_at: null, suspension_reason: null }),
+  });
+
+  await AdminAuditLog.create({
+    admin_id:      adminId,
+    action:        action === 'suspend' ? AdminAction.HOSPITAL_SUSPENDED : AdminAction.HOSPITAL_ACTIVATED,
+    resource_type: 'hospital',
+    resource_id:   hospitalId,
+    meta:          { onboarding_status: newStatus, reason: reason ?? null },
+    ip_address:    null,
+  });
+
+  logger.info(`Hospital ${action}d`, { hospitalId, adminId });
+  return ok({ message: `Hospital ${action}d successfully.`, onboarding_status: newStatus });
+}
+
+// ── List patients ──────────────────────────────────────────────────────────────
+export async function listPatients(filters: {
+  account_status?: string;
+  search?:         string;
+  page:            number;
+  perPage:         number;
+}): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const userWhere: Record<string, unknown> = { role: UserRole.PATIENT };
+  if (filters.account_status) userWhere.account_status = filters.account_status;
+
+  const { rows, count } = await User.findAndCountAll({
+    where: userWhere,
+    include: [{
+      model: PatientProfile, as: 'patientProfile',
+      attributes: ['full_name', 'email', 'gender', 'profile_status'],
+    }],
+    order: [['created_at', 'DESC']],
+    limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+  });
+  return ok({ rows, count });
+}
+
+// ── Update patient status (suspend / activate) ────────────────────────────────
+export async function updatePatientStatus(
+  userId:   string,
+  action:   'suspend' | 'activate',
+  adminId:  string,
+): Promise<ServiceResponse<object>> {
+  const user = await User.findOne({ where: { id: userId, role: UserRole.PATIENT } });
+  if (!user) throw ErrorFactory.notFound('PATIENT_NOT_FOUND', 'Patient not found.');
+
+  const newStatus = action === 'suspend' ? AccountStatus.SUSPENDED : AccountStatus.ACTIVE;
+  await user.update({ account_status: newStatus });
+
+  await AdminAuditLog.create({
+    admin_id:      adminId,
+    action:        action === 'suspend' ? AdminAction.PATIENT_SUSPENDED : AdminAction.PATIENT_ACTIVATED,
+    resource_type: 'patient',
+    resource_id:   userId,
+    meta:          { account_status: newStatus },
+    ip_address:    null,
+  });
+
+  logger.info(`Patient ${action}d`, { userId, adminId });
+  return ok({ message: `Patient ${action}d successfully.`, account_status: newStatus });
+}
+
+// ── List appointments (scoped) ────────────────────────────────────────────────
+export async function listAppointments(filters: {
+  hospital_id?: string;   // injected for HOSPITAL_ADMIN
+  doctor_id?:   string;
+  status?:      string;
+  date?:        string;   // YYYY-MM-DD
+  page:         number;
+  perPage:      number;
+}): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const where: Record<string, unknown> = {};
+  if (filters.hospital_id) where.hospital_id = filters.hospital_id;
+  if (filters.doctor_id)   where.doctor_id   = filters.doctor_id;
+  if (filters.status)      where.status      = filters.status;
+  if (filters.date) {
+    const start = new Date(filters.date);
+    const end   = new Date(filters.date);
+    end.setDate(end.getDate() + 1);
+    where.scheduled_at = { [Op.gte]: start, [Op.lt]: end };
+  }
+
+  const { rows, count } = await Appointment.findAndCountAll({
+    where,
+    include: [
+      { model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] },
+      { model: User,          as: 'patient', attributes: ['mobile'] },
+    ],
+    order: [['scheduled_at', 'DESC']],
+    limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+  });
+  return ok({ rows, count });
+}
+
+// ── Scoped financial summary (with optional hospital scope) ───────────────────
+export async function getScopedFinancialSummary(
+  period:     'today' | 'week' | 'month',
+  hospitalId?: string,
+): Promise<ServiceResponse<object>> {
+  const now = new Date();
+  let periodStart: Date;
+  if (period === 'today') {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  } else if (period === 'week') {
+    periodStart = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
+  } else {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+
+  const apptWhere: Record<string, unknown> = {
+    payment_status: PaymentStatus.CAPTURED,
+    scheduled_at:   { [Op.gte]: periodStart },
+  };
+  if (hospitalId) apptWhere.hospital_id = hospitalId;
+
+  const [appointments, refundCount] = await Promise.all([
+    Appointment.findAll({ where: apptWhere, attributes: ['consultation_fee', 'platform_fee', 'doctor_payout'] }),
+    Appointment.count({ where: { ...(hospitalId ? { hospital_id: hospitalId } : {}), payment_status: PaymentStatus.REFUNDED, scheduled_at: { [Op.gte]: periodStart } } }),
+  ]);
+
+  const gmv             = appointments.reduce((s, a) => s + Number(a.consultation_fee), 0);
+  const platformRevenue = appointments.reduce((s, a) => s + Number(a.platform_fee), 0);
+  const doctorPayouts   = appointments.reduce((s, a) => s + Number(a.doctor_payout), 0);
+  const takeRate        = gmv > 0 ? Math.round((platformRevenue / gmv) * 10000) / 100 : 0;
+
+  return ok({
+    period, period_start: periodStart,
+    total_transactions: appointments.length,
+    gmv:               Math.round(gmv * 100) / 100,
+    platform_revenue:  Math.round(platformRevenue * 100) / 100,
+    doctor_payouts:    Math.round(doctorPayouts * 100) / 100,
+    take_rate_pct:     takeRate,
+    refund_count:      refundCount,
+    generated_at:      new Date(),
+  });
+}
+
+// ── Scoped doctor list ────────────────────────────────────────────────────────
+export async function listDoctorsScoped(filters: {
+  hospital_id?:        string;   // injected for HOSPITAL_ADMIN
+  verification_status?: string;
+  page:                number;
+  perPage:             number;
+}): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  if (filters.hospital_id) {
+    // Scoped: find doctor IDs affiliated with this hospital
+    const affiliations = await DoctorHospitalAffiliation.findAll({
+      where: { hospital_id: filters.hospital_id, is_active: true },
+      attributes: ['doctor_id'],
+    });
+    const doctorIds = affiliations.map(a => a.doctor_id);
+
+    const where: Record<string, unknown> = { id: { [Op.in]: doctorIds } };
+    if (filters.verification_status) where.verification_status = filters.verification_status;
+
+    const { rows, count } = await DoctorProfile.findAndCountAll({
+      where,
+      include: [{ model: User, as: 'user', attributes: ['mobile', 'account_status'] }],
+      order: [['created_at', 'DESC']],
+      limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+    });
+    return ok({ rows, count });
+  }
+
+  return listDoctors(filters);
+}
+
+// ── List hospital staff ───────────────────────────────────────────────────────
+export async function listHospitalStaff(
+  hospitalId: string,
+  page = 1,
+  perPage = 20,
+): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const { rows, count } = await HospitalStaff.findAndCountAll({
+    where: { hospital_id: hospitalId },
+    include: [{ model: User, as: 'user', attributes: ['mobile', 'account_status', 'last_login_at'] }],
+    order: [['created_at', 'DESC']],
+    limit: perPage, offset: (page - 1) * perPage,
+  });
+  return ok({ rows, count });
+}
+
+// ── Audit logs ────────────────────────────────────────────────────────────────
+export async function getAuditLogs(filters: {
+  admin_id?:     string;
+  resource_type?: string;
+  action?:       string;
+  page:          number;
+  perPage:       number;
+}): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const where: Record<string, unknown> = {};
+  if (filters.admin_id)      where.admin_id      = filters.admin_id;
+  if (filters.resource_type) where.resource_type = filters.resource_type;
+  if (filters.action)        where.action        = filters.action;
+
+  const { rows, count } = await AdminAuditLog.findAndCountAll({
+    where,
+    include: [{ model: User, as: 'admin', attributes: ['mobile'] }],
+    order: [['created_at', 'DESC']],
+    limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+  });
+  return ok({ rows, count });
 }
 
 // ── Increment Redis live counters ─────────────────────────────────────────────

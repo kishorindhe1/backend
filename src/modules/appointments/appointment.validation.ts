@@ -18,3 +18,8 @@ export const CancelAppointmentSchema = z.object({
 export const AppointmentIdSchema = z.object({
   params: z.object({ id: z.string().uuid('Invalid appointment ID') }),
 });
+
+export const RejectAppointmentSchema = z.object({
+  params: z.object({ id: z.string().uuid('Invalid appointment ID') }),
+  body:   z.object({ reason: z.string().max(300).optional() }),
+});

@@ -6,6 +6,7 @@ import {
 import { sequelize } from '../config/database';
 
 export enum AppointmentStatus {
+  AWAITING_HOSPITAL_APPROVAL = 'awaiting_hospital_approval',
   PENDING    = 'pending',
   CONFIRMED  = 'confirmed',
   DELAYED    = 'delayed',

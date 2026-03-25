@@ -4,6 +4,11 @@ import {
 } from 'sequelize';
 import { sequelize } from '../config/database';
 
+export enum AppointmentApprovalMode {
+  AUTO   = 'auto',
+  MANUAL = 'manual',
+}
+
 export enum HospitalType {
   CLINIC             = 'clinic',
   NURSING_HOME       = 'nursing_home',
@@ -50,6 +55,9 @@ export class Hospital extends Model<
   declare latitude:          number | null;
   declare longitude:         number | null;
 
+  // Appointment settings
+  declare appointment_approval: CreationOptional<AppointmentApprovalMode>;
+
   // Meta
   declare is_verified:       CreationOptional<boolean>;
   declare went_live_at:      Date | null;
@@ -85,6 +93,12 @@ Hospital.init(
     pincode:       { type: DataTypes.STRING(10),  allowNull: true },
     latitude:      { type: DataTypes.DECIMAL(10, 8), allowNull: true },
     longitude:     { type: DataTypes.DECIMAL(11, 8), allowNull: true },
+
+    appointment_approval: {
+      type: DataTypes.ENUM(...Object.values(AppointmentApprovalMode)),
+      allowNull: false,
+      defaultValue: AppointmentApprovalMode.AUTO,
+    },
 
     is_verified:       { type: DataTypes.BOOLEAN,   allowNull: false, defaultValue: false },
     went_live_at:      { type: DataTypes.DATE,       allowNull: true },

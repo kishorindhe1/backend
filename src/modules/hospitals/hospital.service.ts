@@ -1,4 +1,4 @@
-import { Hospital, HospitalType, OnboardingStatus } from '../../models';
+import { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode } from '../../models';
 import { HospitalStaff, StaffRole }                 from '../../models';
 import { User }                from '../../models';
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
@@ -232,4 +232,24 @@ export async function addReceptionist(
     staff_role: StaffRole.RECEPTIONIST, hospital_id: hospitalId,
     message: created ? 'Receptionist added.' : 'Receptionist reactivated.',
   });
+}
+
+// ── Update appointment approval mode ──────────────────────────────────────────
+export async function updateAppointmentApprovalMode(
+  hospitalId: string,
+  mode:       AppointmentApprovalMode,
+  requesterId: string,
+): Promise<ServiceResponse<{ appointment_approval: AppointmentApprovalMode }>> {
+  const hospital = await Hospital.findByPk(hospitalId);
+  if (!hospital) return fail('HOSPITAL_NOT_FOUND', 'Hospital not found.', 404);
+
+  // Verify the requester is an admin of this hospital
+  const staff = await HospitalStaff.findOne({
+    where: { hospital_id: hospitalId, user_id: requesterId, is_active: true },
+  });
+  if (!staff) return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'You are not an admin of this hospital.', 403);
+
+  await hospital.update({ appointment_approval: mode });
+  logger.info('Hospital approval mode updated', { hospitalId, mode, requesterId });
+  return ok({ appointment_approval: hospital.appointment_approval });
 }

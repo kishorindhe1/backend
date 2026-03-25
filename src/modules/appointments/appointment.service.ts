@@ -6,6 +6,7 @@ import {
   AppointmentType, PaymentMode, CancellationBy,
   DoctorProfile,
   DoctorHospitalAffiliation,
+  Hospital, AppointmentApprovalMode,
 }                                         from '../../models';
 import { env }                           from '../../config/env';
 import { ErrorFactory }                  from '../../utils/errors';
@@ -43,6 +44,11 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
   if (!acquired) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot is currently being booked. Please try another.');
 
   try {
+    // Check hospital's approval mode before the transaction
+    const hospital = await Hospital.findByPk(hospital_id, { attributes: ['appointment_approval'] });
+    if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
+    const isAutoApproval = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
+
     const result = await sequelize.transaction(async (t) => {
       // Layer 2 — SELECT FOR UPDATE
       const slot = await GeneratedSlot.findOne({
@@ -63,7 +69,9 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       const appointment = await Appointment.create({
         patient_id, doctor_id, hospital_id, slot_id,
         scheduled_at:     slot.slot_datetime,
-        status:           AppointmentStatus.PENDING,
+        status:           isAutoApproval
+          ? AppointmentStatus.PENDING
+          : AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
         payment_status:   PaymentStatus.PENDING,
         appointment_type: input.appointment_type ?? AppointmentType.ONLINE_BOOKING,
         payment_mode:     PaymentMode.ONLINE_PREPAID,
@@ -86,27 +94,41 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     // Add to consultation queue
     await addToQueue(result.id, doctor_id, hospital_id, patient_id, result.scheduled_at);
 
-    // Fetch doctor name for notification
     const doctor = await DoctorProfile.findByPk(doctor_id, { attributes: ['full_name'] });
 
-    // Enqueue booking confirmation notification
-    await enqueueNotification({
-      userId:        patient_id,
-      appointmentId: result.id,
-      type:          'booking_confirmed',
-      channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
-      priority:      'high',
-      data: {
-        name:   'Patient',
-        doctor: doctor?.full_name ?? 'Doctor',
-        date:   result.scheduled_at.toDateString(),
-        time:   result.scheduled_at.toTimeString().slice(0, 5),
-        token:  '—',
-      },
-    });
+    if (isAutoApproval) {
+      await enqueueNotification({
+        userId:        patient_id,
+        appointmentId: result.id,
+        type:          'booking_confirmed',
+        channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+        priority:      'high',
+        data: {
+          name:   'Patient',
+          doctor: doctor?.full_name ?? 'Doctor',
+          date:   result.scheduled_at.toDateString(),
+          time:   result.scheduled_at.toTimeString().slice(0, 5),
+          token:  '—',
+        },
+      });
+    } else {
+      await enqueueNotification({
+        userId:        patient_id,
+        appointmentId: result.id,
+        type:          'booking_awaiting_approval',
+        channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+        priority:      'high',
+        data: {
+          name:   'Patient',
+          doctor: doctor?.full_name ?? 'Doctor',
+          date:   result.scheduled_at.toDateString(),
+          time:   result.scheduled_at.toTimeString().slice(0, 5),
+        },
+      });
+    }
 
     await incrementCounter('bookings');
-    logger.info('Appointment booked', { appointmentId: result.id, patientId: patient_id });
+    logger.info('Appointment booked', { appointmentId: result.id, patientId: patient_id, approval_mode: hospital.appointment_approval });
 
     return ok({
       appointment_id:   result.id,
@@ -258,6 +280,107 @@ export async function getPatientAppointments(patientId: string, page = 1, perPag
     where:   { patient_id: patientId },
     include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] }],
     order:   [['scheduled_at', 'DESC']],
+    limit: perPage, offset: (page - 1) * perPage,
+  });
+  return ok({ rows, count });
+}
+
+// ── Hospital: accept appointment ──────────────────────────────────────────────
+export async function acceptAppointment(
+  appointmentId: string,
+  hospitalId:    string,
+): Promise<ServiceResponse<{ message: string }>> {
+  const appointment = await Appointment.findByPk(appointmentId);
+  if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');
+  if (appointment.hospital_id !== hospitalId) throw ErrorFactory.forbidden('AUTH_INSUFFICIENT_PERMISSIONS', 'This appointment does not belong to your hospital.');
+  if (appointment.status !== AppointmentStatus.AWAITING_HOSPITAL_APPROVAL) {
+    throw ErrorFactory.unprocessable('BOOKING_INVALID_STATUS', 'Only appointments awaiting hospital approval can be accepted.');
+  }
+
+  await appointment.update({ status: AppointmentStatus.PENDING });
+
+  const doctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
+  await enqueueNotification({
+    userId:        appointment.patient_id,
+    appointmentId: appointment.id,
+    type:          'booking_confirmed',
+    channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+    priority:      'high',
+    data: {
+      name:   'Patient',
+      doctor: doctor?.full_name ?? 'Doctor',
+      date:   appointment.scheduled_at.toDateString(),
+      time:   appointment.scheduled_at.toTimeString().slice(0, 5),
+      token:  '—',
+    },
+  });
+
+  logger.info('Appointment accepted by hospital', { appointmentId, hospitalId });
+  return ok({ message: 'Appointment accepted successfully.' });
+}
+
+// ── Hospital: reject appointment ──────────────────────────────────────────────
+export async function rejectAppointment(
+  appointmentId: string,
+  hospitalId:    string,
+  reason?:       string,
+): Promise<ServiceResponse<{ message: string; refund_eligible: boolean }>> {
+  const appointment = await Appointment.findByPk(appointmentId);
+  if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');
+  if (appointment.hospital_id !== hospitalId) throw ErrorFactory.forbidden('AUTH_INSUFFICIENT_PERMISSIONS', 'This appointment does not belong to your hospital.');
+  if (appointment.status !== AppointmentStatus.AWAITING_HOSPITAL_APPROVAL) {
+    throw ErrorFactory.unprocessable('BOOKING_INVALID_STATUS', 'Only appointments awaiting hospital approval can be rejected.');
+  }
+
+  const refund_eligible = appointment.payment_status === PaymentStatus.CAPTURED;
+
+  await sequelize.transaction(async (t) => {
+    await appointment.update({
+      status:              AppointmentStatus.CANCELLED,
+      payment_status:      refund_eligible ? PaymentStatus.REFUND_PENDING : appointment.payment_status,
+      cancellation_reason: reason ?? null,
+      cancelled_by:        CancellationBy.ADMIN,
+      cancelled_at:        new Date(),
+    }, { transaction: t });
+
+    if (appointment.slot_id) {
+      await GeneratedSlot.update(
+        { status: SlotStatus.AVAILABLE, appointment_id: null },
+        { where: { id: appointment.slot_id }, transaction: t },
+      );
+    }
+  });
+
+  const dateStr = appointment.scheduled_at.toISOString().split('T')[0];
+  await redis.del(RedisKeys.availableSlots(appointment.doctor_id, dateStr));
+
+  await enqueueNotification({
+    userId:        appointment.patient_id,
+    appointmentId: appointment.id,
+    type:          'booking_rejected_hospital',
+    channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+    priority:      'high',
+    data: { name: 'Patient', doctor: 'Doctor', date: appointment.scheduled_at.toDateString() },
+  });
+
+  logger.info('Appointment rejected by hospital', { appointmentId, hospitalId, refund_eligible });
+  return ok({ message: 'Appointment rejected successfully.', refund_eligible });
+}
+
+// ── Hospital: list appointments ───────────────────────────────────────────────
+export async function getHospitalAppointments(
+  hospitalId: string,
+  status?:    AppointmentStatus,
+  page  = 1,
+  perPage = 20,
+): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const where: Record<string, unknown> = { hospital_id: hospitalId };
+  if (status) where['status'] = status;
+
+  const { rows, count } = await Appointment.findAndCountAll({
+    where,
+    include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] }],
+    order:   [['scheduled_at', 'ASC']],
     limit: perPage, offset: (page - 1) * perPage,
   });
   return ok({ rows, count });

@@ -17,7 +17,7 @@
 
 // ── Tier 1 ────────────────────────────────────────────────────────────────────
 export { User }                        from './user.model';
-export { Hospital, HospitalType, OnboardingStatus } from './hospital.model';
+export { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode } from './hospital.model';
 
 // ── Tier 2 ────────────────────────────────────────────────────────────────────
 export { PatientProfile, Gender }      from './patient.model';
@@ -76,6 +76,9 @@ export { SymptomSpecialisationMap }        from './symptom-map.model';
 // ── Phase 5 models ─────────────────────────────────────────────────────────────
 export { DoctorReview }                    from './review.model';
 export { HealthRecord, RecordType }        from './health-record.model';
+
+// ── Admin ──────────────────────────────────────────────────────────────────────
+export { AdminAuditLog, AdminAction }      from './admin-audit-log.model';
 
 import { DoctorSearchIndex }           from './doctor-search-index.model';
 
@@ -200,3 +203,8 @@ DoctorReview.belongsTo(Appointment,  { foreignKey: 'appointment_id', as: 'appoin
 // ── Health Records ────────────────────────────────────────────────────────────
 User.hasMany(HealthRecord,         { foreignKey: 'patient_id', as: 'healthRecords' });
 HealthRecord.belongsTo(User,         { foreignKey: 'patient_id', as: 'patient' });
+
+// ── Admin Audit Logs ──────────────────────────────────────────────────────────
+import { AdminAuditLog }           from './admin-audit-log.model';
+User.hasMany(AdminAuditLog,        { foreignKey: 'admin_id',   as: 'auditLogs' });
+AdminAuditLog.belongsTo(User,        { foreignKey: 'admin_id',   as: 'admin' });
