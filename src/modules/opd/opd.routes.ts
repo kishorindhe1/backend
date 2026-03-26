@@ -46,6 +46,24 @@ async function issueWalkInToken(req: Request, res: Response): Promise<void> {
   sendCreated(res, result.data);
 }
 
+async function pauseSession(req: Request, res: Response): Promise<void> {
+  const result = await OpdService.pauseSession(param(req, 'sessionId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
+async function resumeSession(req: Request, res: Response): Promise<void> {
+  const result = await OpdService.resumeSession(param(req, 'sessionId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
+async function cancelSession(req: Request, res: Response): Promise<void> {
+  const result = await OpdService.cancelSession(param(req, 'sessionId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function activateSession(req: Request, res: Response): Promise<void> {
   const user   = req.user as JwtAccessPayload;
   const result = await OpdService.activateSession(param(req, 'sessionId'), user.sub);
@@ -59,21 +77,42 @@ async function callNext(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function getTokens(req: Request, res: Response): Promise<void> {
+  const result = await OpdService.listTokens(param(req, 'sessionId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function getStats(req: Request, res: Response): Promise<void> {
   const result = await OpdService.getSessionStats(param(req, 'sessionId'));
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   sendSuccess(res, result.data);
 }
 
+async function listSessions(req: Request, res: Response): Promise<void> {
+  const { hospital_id, doctor_id, date } = req.query as { hospital_id?: string; doctor_id?: string; date?: string };
+  if (!hospital_id) { sendError(res, 400, { code: 'MISSING_HOSPITAL', message: 'hospital_id query param is required.' }); return; }
+  const result = await OpdService.listSessions(hospital_id, doctor_id, date);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 const router = Router();
+
+// List sessions
+router.get('/',                          authenticate, requireRole(...STAFF), asyncHandler(listSessions));
 
 // Staff-only routes
 router.post('/',                         authenticate, requireRole(...STAFF), validate(CreateSessionSchema), asyncHandler(createSession));
 router.patch('/:sessionId/activate',     authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(activateSession));
+router.patch('/:sessionId/pause',        authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(pauseSession));
+router.patch('/:sessionId/resume',       authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(resumeSession));
+router.patch('/:sessionId/cancel',       authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(cancelSession));
 router.post ('/:sessionId/call-next',    authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(callNext));
 router.post ('/:sessionId/walkin-token', authenticate, requireRole(...STAFF), validate(WalkInTokenSchema),   asyncHandler(issueWalkInToken));
 
-// Stats — staff + doctor
+// Token list + stats — staff + doctor
+router.get  ('/:sessionId/tokens',       authenticate, requireRole(...STAFF), validate(SessionIdSchema), asyncHandler(getTokens));
 router.get  ('/:sessionId/stats',        authenticate, validate(SessionIdSchema), asyncHandler(getStats));
 
 export default router;

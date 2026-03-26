@@ -20,6 +20,18 @@ function parseTime(timeStr: string, baseDate: Date): Date {
   return d;
 }
 
+// ── List schedules for a doctor at a hospital ─────────────────────────────────
+export async function listSchedules(
+  doctorId: string,
+  hospitalId: string,
+): Promise<ServiceResponse<object[]>> {
+  const schedules = await Schedule.findAll({
+    where: { doctor_id: doctorId, hospital_id: hospitalId },
+    order: [['day_of_week', 'ASC'], ['start_time', 'ASC']],
+  });
+  return ok(schedules.map((s) => s.toJSON()));
+}
+
 // ── Generate slots for a doctor from today → N days ahead ────────────────────
 export async function generateSlotsForDoctor(
   doctorId: string,
@@ -135,6 +147,21 @@ export async function getAvailableSlots(
 
   await redis.setex(cacheKey, RedisTTL.AVAILABLE_SLOTS, JSON.stringify(result));
   return ok(result);
+}
+
+// ── Deactivate a schedule ─────────────────────────────────────────────────────
+export async function deactivateSchedule(
+  scheduleId: string,
+): Promise<ServiceResponse<{ message: string }>> {
+  const schedule = await Schedule.findByPk(scheduleId);
+  if (!schedule) return fail('SCHEDULE_NOT_FOUND', 'Schedule not found.', 404);
+  if (!schedule.is_active) return fail('ALREADY_INACTIVE', 'Schedule is already inactive.', 409);
+
+  await schedule.update({ is_active: false });
+  await redis.del(RedisKeys.doctorSchedule(schedule.doctor_id));
+
+  logger.info('Schedule deactivated', { scheduleId });
+  return ok({ message: 'Schedule deactivated successfully.' });
 }
 
 // ── Block a slot (doctor leave, holiday) ─────────────────────────────────────

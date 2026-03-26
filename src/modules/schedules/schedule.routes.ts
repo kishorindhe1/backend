@@ -28,6 +28,20 @@ const GenerateSlotsSchema = z.object({
 });
 
 // ── Controllers ───────────────────────────────────────────────────────────────
+async function deactivateSchedule(req: Request, res: Response): Promise<void> {
+  const { scheduleId } = req.params as { scheduleId: string };
+  const result = await ScheduleService.deactivateSchedule(scheduleId);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
+async function getSchedules(req: Request, res: Response): Promise<void> {
+  const { doctorId, hospitalId } = req.params as { doctorId: string; hospitalId: string };
+  const result = await ScheduleService.listSchedules(doctorId, hospitalId);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function getAvailableSlots(req: Request, res: Response): Promise<void> {
   const { doctorId, hospitalId } = req.params as { doctorId: string; hospitalId: string };
   const { date } = req.query as { date: string };
@@ -49,11 +63,27 @@ async function triggerSlotGeneration(req: Request, res: Response): Promise<void>
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 
+// Protected — staff list schedules for a doctor
+router.get(
+  '/:doctorId/:hospitalId',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST),
+  asyncHandler(getSchedules),
+);
+
 // Public — patients browse slots
 router.get(
   '/:doctorId/:hospitalId/slots',
   validate(GetSlotsSchema),
   asyncHandler(getAvailableSlots),
+);
+
+// Protected — deactivate a schedule
+router.patch(
+  '/:scheduleId/deactivate',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  asyncHandler(deactivateSchedule),
 );
 
 // Protected — hospital admin / super admin trigger slot generation

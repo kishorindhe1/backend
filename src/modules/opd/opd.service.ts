@@ -161,6 +161,83 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
   return ok({ message: `Token #${next.token_number} called.`, token_number: next.token_number, patient_id: next.patient_id });
 }
 
+// ── Pause session ─────────────────────────────────────────────────────────────
+export async function pauseSession(sessionId: string): Promise<ServiceResponse<object>> {
+  const session = await OpdSession.findByPk(sessionId);
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+  if (session.status !== OpdSessionStatus.ACTIVE) throw ErrorFactory.unprocessable('INVALID_STATUS', 'Only an active session can be paused.');
+
+  await session.update({ status: OpdSessionStatus.PAUSED });
+  logger.info('OPD session paused', { sessionId });
+  return ok({ session_id: sessionId, status: OpdSessionStatus.PAUSED });
+}
+
+// ── Resume session ────────────────────────────────────────────────────────────
+export async function resumeSession(sessionId: string): Promise<ServiceResponse<object>> {
+  const session = await OpdSession.findByPk(sessionId);
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+  if (session.status !== OpdSessionStatus.PAUSED) throw ErrorFactory.unprocessable('INVALID_STATUS', 'Only a paused session can be resumed.');
+
+  await session.update({ status: OpdSessionStatus.ACTIVE });
+  logger.info('OPD session resumed', { sessionId });
+  return ok({ session_id: sessionId, status: OpdSessionStatus.ACTIVE });
+}
+
+// ── Cancel session ────────────────────────────────────────────────────────────
+export async function cancelSession(sessionId: string): Promise<ServiceResponse<object>> {
+  const session = await OpdSession.findByPk(sessionId);
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+  if (session.status === OpdSessionStatus.COMPLETED || session.status === OpdSessionStatus.CANCELLED) {
+    throw ErrorFactory.unprocessable('INVALID_STATUS', `Cannot cancel a ${session.status} session.`);
+  }
+
+  await session.update({ status: OpdSessionStatus.CANCELLED });
+  logger.info('OPD session cancelled', { sessionId });
+  return ok({ session_id: sessionId, status: OpdSessionStatus.CANCELLED });
+}
+
+// ── List sessions ─────────────────────────────────────────────────────────────
+export async function listSessions(
+  hospitalId: string,
+  doctorId?: string,
+  date?: string,
+): Promise<ServiceResponse<object[]>> {
+  const where: Record<string, unknown> = { hospital_id: hospitalId };
+  if (doctorId) where.doctor_id = doctorId;
+  if (date)     where.session_date = date;
+
+  const sessions = await OpdSession.findAll({
+    where,
+    order: [['session_date', 'DESC'], ['start_time', 'ASC']],
+  });
+
+  return ok(sessions.map((s) => s.toJSON()));
+}
+
+// ── List tokens for a session ─────────────────────────────────────────────────
+export async function listTokens(sessionId: string): Promise<ServiceResponse<object[]>> {
+  const session = await OpdSession.findByPk(sessionId);
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+
+  const tokens = await OpdToken.findAll({
+    where:  { session_id: sessionId },
+    order:  [['token_number', 'ASC']],
+  });
+
+  return ok(tokens.map((t) => ({
+    id:                 t.id,
+    token_number:       t.token_number,
+    patient_id:         t.patient_id,
+    token_type:         t.token_type,
+    status:             t.status,
+    issued_at:          t.issued_at,
+    arrived_at:         t.arrived_at,
+    called_at:          t.called_at,
+    consultation_start: t.consultation_start,
+    consultation_end:   t.consultation_end,
+  })));
+}
+
 // ── Get session live stats ────────────────────────────────────────────────────
 export async function getSessionStats(sessionId: string): Promise<ServiceResponse<object>> {
   const session = await OpdSession.findByPk(sessionId, {

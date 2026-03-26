@@ -108,6 +108,7 @@ router.get('/appointments',
     const result  = await AdminService.listAppointments({
       hospital_id: scopeId ?? (qs(req, 'hospital_id') || undefined),
       doctor_id:   qs(req, 'doctor_id') || undefined,
+      patient_id:  qs(req, 'patient_id') || undefined,
       status:      qs(req, 'status') || undefined,
       date:        qs(req, 'date') || undefined,
       page:  page(req),

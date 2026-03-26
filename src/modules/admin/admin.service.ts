@@ -431,6 +431,7 @@ export async function updatePatientStatus(
 export async function listAppointments(filters: {
   hospital_id?: string;   // injected for HOSPITAL_ADMIN
   doctor_id?:   string;
+  patient_id?:  string;
   status?:      string;
   date?:        string;   // YYYY-MM-DD
   page:         number;
@@ -439,6 +440,7 @@ export async function listAppointments(filters: {
   const where: Record<string, unknown> = {};
   if (filters.hospital_id) where.hospital_id = filters.hospital_id;
   if (filters.doctor_id)   where.doctor_id   = filters.doctor_id;
+  if (filters.patient_id)  where.patient_id  = filters.patient_id;
   if (filters.status)      where.status      = filters.status;
   if (filters.date) {
     const start = new Date(filters.date);
