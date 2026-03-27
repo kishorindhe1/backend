@@ -45,6 +45,28 @@ router.get('/status/:appointmentId',
   asyncHandler(getQueueStatus),
 );
 
+// Public — hospital-wide display (all doctors today)
+router.get('/display/hospital/:hospitalId',
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await QueueService.getHospitalQueueDisplay(param(req, 'hospitalId'));
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+// Public — single doctor display (no auth, no PII) — must be before /:doctorId/:hospitalId
+router.get('/display/:doctorId/:hospitalId',
+  validate(DoctorQueueSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await QueueService.getQueueDisplay(
+      param(req, 'doctorId'),
+      param(req, 'hospitalId'),
+    );
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
 // Doctor / Receptionist — full day queue
 router.get('/:doctorId/:hospitalId',
   authenticate,

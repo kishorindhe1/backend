@@ -23,6 +23,7 @@ export class UserNotificationPreference extends Model<
   declare quiet_hours_end:          CreationOptional<string>;
   declare reminder_lead_time_hours: CreationOptional<number>;
   declare queue_notify_at_position: CreationOptional<number>;
+  declare fcm_token:                CreationOptional<string | null>;
   declare created_at:               CreationOptional<Date>;
   declare updated_at:               CreationOptional<Date>;
 }
@@ -45,6 +46,7 @@ UserNotificationPreference.init(
     quiet_hours_end:           { type: DataTypes.STRING(5),  allowNull: false, defaultValue: '07:00' },
     reminder_lead_time_hours:  { type: DataTypes.INTEGER,    allowNull: false, defaultValue: 2 },
     queue_notify_at_position:  { type: DataTypes.INTEGER,    allowNull: false, defaultValue: 2 },
+    fcm_token:                 { type: DataTypes.TEXT,       allowNull: true,  defaultValue: null },
     created_at: DataTypes.DATE,
     updated_at: DataTypes.DATE,
   },

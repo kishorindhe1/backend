@@ -11,6 +11,8 @@ export class User extends Model<
 > {
   declare id: CreationOptional<string>;
   declare mobile: string;
+  declare email: string | null;
+  declare password_hash: string | null;
   declare country_code: CreationOptional<string>;
   declare otp_secret: string | null;
   declare otp_expires_at: Date | null;
@@ -38,6 +40,15 @@ User.init(
       allowNull: false,
       unique: true,
       validate: { notEmpty: true },
+    },
+    email: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      unique: true,
+    },
+    password_hash: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
     },
     country_code: {
       type: DataTypes.STRING(5),

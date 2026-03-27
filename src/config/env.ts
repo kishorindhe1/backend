@@ -57,6 +57,22 @@ const envSchema = z.object({
 
   // Slot generation
   SLOT_GENERATION_DAYS_AHEAD: z.string().default('30').transform(Number),
+
+  // Firebase (FCM push notifications) — set ONE of these:
+  FIREBASE_SERVICE_ACCOUNT_PATH: z.string().optional(),
+  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+
+  // AWS
+  AWS_REGION:            z.string().default('ap-south-1'),
+  AWS_ACCESS_KEY_ID:     z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+
+  // AWS SES
+  AWS_SES_FROM_EMAIL:    z.string().optional(),  // must be a verified identity in SES
+  AWS_SES_FROM_NAME:     z.string().default('Upcharify'),
+
+  // AWS SNS SMS
+  AWS_SNS_SENDER_ID:     z.string().default('UPCHARY'),   // registered DLT sender ID (max 11 chars)
 });
 
 const parsed = envSchema.safeParse(process.env);

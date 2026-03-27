@@ -9,6 +9,12 @@ import { z }                          from 'zod';
 
 const qs = (req: Request, k: string, d: string) => String((req.query as Record<string,string>)[k] ?? d);
 
+const DeviceTokenSchema = z.object({
+  body: z.object({
+    fcm_token: z.string().min(1),
+  }),
+});
+
 const PrefsSchema = z.object({
   body: z.object({
     sms_enabled:              z.boolean().optional(),
@@ -45,6 +51,12 @@ async function getHistory(req: Request, res: Response): Promise<void> {
 const router = Router();
 router.use(authenticate);
 
+router.put ('/device-token',   validate(DeviceTokenSchema), asyncHandler(async (req, res) => {
+  const user   = req.user as JwtAccessPayload;
+  const result = await NotificationService.registerDeviceToken(user.sub, req.body.fcm_token);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
 router.get ('/preferences',    asyncHandler(async (req, res) => {
   const user   = req.user as JwtAccessPayload;
   const result = await NotificationService.getPreferences(user.sub);

@@ -3,9 +3,10 @@ import { redis, RedisKeys, RedisTTL }  from '../../config/redis';
 import {
   ConsultationQueue, QueueStatus,
   Appointment, AppointmentStatus,
-  DoctorProfile,
+  DoctorProfile, Hospital,
   DoctorDelayEvent, DelayStatus,
   UserNotificationPreference,
+  User, PatientProfile,
 }                                       from '../../models';
 import { ServiceResponse, ok, fail }    from '../../types';
 import { logger }                       from '../../utils/logger';
@@ -123,10 +124,130 @@ export async function getDoctorDayQueue(
 ): Promise<ServiceResponse<object[]>> {
   const entries = await ConsultationQueue.findAll({
     where: { doctor_id: doctorId, queue_date: date },
-    include: [{ model: Appointment, as: 'appointment', attributes: ['id', 'scheduled_at', 'appointment_type', 'notes'] }],
+    include: [{
+      model: Appointment,
+      as: 'appointment',
+      attributes: ['id', 'scheduled_at', 'appointment_type', 'notes'],
+      include: [{
+        model: User,
+        as: 'patient',
+        attributes: ['id', 'mobile'],
+        include: [{
+          model: PatientProfile,
+          as: 'patientProfile',
+          attributes: ['full_name'],
+        }],
+      }],
+    }],
     order: [['queue_position', 'ASC']],
   });
   return ok(entries);
+}
+
+// ── Public display data (no PII — token numbers only) ────────────────────────
+
+export interface QueueDisplayResult {
+  doctor:         { full_name: string; specialization: string };
+  hospital:       { name: string; city: string };
+  current_token:  number | null;
+  status:         string;
+  next_tokens:    number[];
+  total_waiting:  number;
+  delay_minutes:  number;
+  last_updated:   string;
+}
+
+export async function getQueueDisplay(
+  doctorId:   string,
+  hospitalId: string,
+): Promise<ServiceResponse<QueueDisplayResult>> {
+  const cacheKey = `queue:display:${doctorId}:${hospitalId}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return ok(JSON.parse(cached) as QueueDisplayResult);
+
+  const date = new Date().toISOString().split('T')[0];
+
+  const [doctor, hospital, entries, delayEvent] = await Promise.all([
+    DoctorProfile.findByPk(doctorId, { attributes: ['full_name', 'specialization'] }),
+    Hospital.findByPk(hospitalId, { attributes: ['name', 'city'] }),
+    ConsultationQueue.findAll({
+      where: { doctor_id: doctorId, queue_date: date },
+      attributes: ['queue_position', 'status'],
+      order: [['queue_position', 'ASC']],
+    }),
+    DoctorDelayEvent.findOne({
+      where: { doctor_id: doctorId, event_date: date, status: DelayStatus.ACTIVE },
+      order: [['created_at', 'DESC']],
+    }),
+  ]);
+
+  if (!doctor || !hospital) return fail('NOT_FOUND', 'Doctor or hospital not found.', 404);
+
+  const inConsult  = entries.find((e) => e.status === QueueStatus.IN_CONSULTATION);
+  const called     = entries.find((e) => e.status === QueueStatus.CALLED);
+  const current    = inConsult ?? called;
+  const waiting    = entries.filter((e) => e.status === QueueStatus.WAITING);
+  const nextTokens = waiting.slice(0, 5).map((e) => e.queue_position);
+
+  const result: QueueDisplayResult = {
+    doctor:        { full_name: (doctor as any).full_name, specialization: (doctor as any).specialization },
+    hospital:      { name: (hospital as any).name, city: (hospital as any).city },
+    current_token: current?.queue_position ?? null,
+    status:        inConsult ? 'in_consultation' : called ? 'called' : delayEvent ? 'delayed' : 'available',
+    next_tokens:   nextTokens,
+    total_waiting: waiting.length,
+    delay_minutes: delayEvent?.delay_minutes ?? 0,
+    last_updated:  new Date().toISOString(),
+  };
+
+  await redis.setex(cacheKey, 10, JSON.stringify(result));
+  return ok(result);
+}
+
+// ── Hospital-wide display (all active doctors today) ─────────────────────────
+
+export interface HospitalDisplayResult {
+  hospital:  { name: string; city: string };
+  doctors:   QueueDisplayResult[];
+  generated: string;
+}
+
+export async function getHospitalQueueDisplay(
+  hospitalId: string,
+): Promise<ServiceResponse<HospitalDisplayResult>> {
+  const cacheKey = `queue:hospital-display:${hospitalId}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return ok(JSON.parse(cached) as HospitalDisplayResult);
+
+  const date = new Date().toISOString().split('T')[0];
+
+  const hospital = await Hospital.findByPk(hospitalId, { attributes: ['name', 'city'] });
+  if (!hospital) return fail('NOT_FOUND', 'Hospital not found.', 404);
+
+  // Find all doctors who have queue entries today for this hospital
+  const activeEntries = await ConsultationQueue.findAll({
+    where:      { hospital_id: hospitalId, queue_date: date },
+    attributes: ['doctor_id'],
+    group:      ['doctor_id'],
+  });
+
+  const doctorIds = activeEntries.map((e) => e.doctor_id);
+
+  const doctorResults = await Promise.all(
+    doctorIds.map(async (doctorId) => {
+      const res = await getQueueDisplay(doctorId, hospitalId);
+      return res.success ? res.data : null;
+    }),
+  );
+
+  const result: HospitalDisplayResult = {
+    hospital:  { name: (hospital as any).name, city: (hospital as any).city },
+    doctors:   doctorResults.filter(Boolean) as QueueDisplayResult[],
+    generated: new Date().toISOString(),
+  };
+
+  await redis.setex(cacheKey, 10, JSON.stringify(result));
+  return ok(result);
 }
 
 export async function addToQueue(

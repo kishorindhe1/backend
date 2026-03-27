@@ -6,3 +6,4 @@ logs/
 .DS_Store
 *.js.map
 coverage/
+firebase-service-account.json

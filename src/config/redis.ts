@@ -27,9 +27,11 @@ export async function connectRedis(): Promise<void> {
 // ── Redis key factory ─────────────────────────────────────────────────────────
 export const RedisKeys = {
   // Phase 1 — Auth
-  otpCooldown:  (mobile: string) => `otp:cooldown:${mobile}`,
-  otpLockout:   (mobile: string) => `otp:lockout:${mobile}`,
-  otpAttempts:  (mobile: string) => `otp:attempts:${mobile}`,
+  otpCooldown:      (mobile: string) => `otp:cooldown:${mobile}`,
+  otpLockout:       (mobile: string) => `otp:lockout:${mobile}`,
+  otpAttempts:      (mobile: string) => `otp:attempts:${mobile}`,
+  adminTfaCooldown: (email: string)  => `admin:tfa:cooldown:${email}`,
+  adminTfaLockout:  (email: string)  => `admin:tfa:lockout:${email}`,
   jwtBlacklist: (jti: string)    => `blacklist:jti:${jti}`,
   refreshToken: (userId: string) => `refresh:${userId}`,
 
