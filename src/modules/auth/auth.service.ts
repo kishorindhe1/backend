@@ -11,6 +11,7 @@ import { UserRole, AccountStatus, ProfileStatus, ServiceResponse, ok, fail } fro
 import { ErrorFactory } from '../../utils/errors';
 import { incrementCounter } from '../admin/admin.service';
 import { logger }       from '../../utils/logger';
+import { sendSMS }      from '../../utils/smsProvider';
 
 export interface RequestOtpResult {
   expires_in: number; resend_allowed_in: number; masked_mobile: string;
@@ -117,6 +118,7 @@ export async function logout(jti: string, exp: number, userId: string): Promise<
 }
 
 async function sendOtpSms(mobile: string, otp: string): Promise<void> {
-  if (env.NODE_ENV === 'development') { logger.debug(`📱  OTP for ${maskMobile(mobile)}: ${otp}`); return; }
-  logger.info('SMS sent', { mobile: maskMobile(mobile) });
+  const message = `Your Upcharify OTP is ${otp}. Valid for ${env.OTP_EXPIRY_MINUTES} minutes. Do not share with anyone.`;
+  const result  = await sendSMS(mobile, message);
+  logger.info('OTP SMS sent', { mobile: maskMobile(mobile), provider: result.provider });
 }
