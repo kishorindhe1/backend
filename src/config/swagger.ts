@@ -10,7 +10,7 @@ const options: swaggerJsdoc.Options = {
       title:       'Healthcare Appointment Booking API',
       version:     '4.0.0',
       description: 'Production-ready API for healthcare appointment booking with OPD queue management, real-time notifications, and search.',
-      contact:     { name: 'Engineering', email: 'engineering@example.com' },
+      contact:     { name: 'Engineering', email: 'engineering@upcharify.com' },
     },
     servers: [
       { url: `http://localhost:${env.PORT}/api/v1`, description: 'Development' },

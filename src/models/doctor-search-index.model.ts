@@ -67,7 +67,7 @@ DoctorSearchIndex.init(
 
     hospital_name: { type: DataTypes.STRING(200), allowNull: false },
     city:          { type: DataTypes.STRING(100), allowNull: false },
-    area:          { type: DataTypes.STRING(200), allowNull: true },
+    area:          { type: DataTypes.STRING(300), allowNull: true },
     latitude:      { type: DataTypes.DECIMAL(10, 8), allowNull: true },
     longitude:     { type: DataTypes.DECIMAL(11, 8), allowNull: true },
 

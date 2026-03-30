@@ -11,6 +11,7 @@ module.exports = {
       {
         id:             adminId,
         mobile:         '9000000001',
+        email:          'admin@upcharify.com',
         country_code:   '+91',
         otp_secret:     null,
         otp_expires_at: null,

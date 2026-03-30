@@ -21,7 +21,7 @@ module.exports = {
       id: hospitalId, name: 'Nashik Care Hospital', legal_name: 'Nashik Care Pvt Ltd',
       registration_number: 'MH/2018/HC001', hospital_type: 'hospital',
       onboarding_status: 'live', phone_primary: '0253-2345678',
-      email_general: 'info@nashikcare.com', website: null,
+      email_general: 'info@upcharify.com', website: null,
       address_line1: 'Plot 42, Gangapur Road', address_line2: 'Near Old Bus Stand',
       city: 'Nashik', state: 'Maharashtra', pincode: '422013',
       latitude: 20.0059, longitude: 73.7897,
