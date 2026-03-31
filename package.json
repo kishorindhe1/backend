@@ -39,6 +39,7 @@
     "pg": "^8.11.3",
     "pg-hstore": "^2.3.4",
     "rate-limit-redis": "^4.2.0",
+    "razorpay": "^2.9.6",
     "sequelize": "^6.37.1",
     "supertest": "^7.2.2",
     "swagger-jsdoc": "^6.2.8",

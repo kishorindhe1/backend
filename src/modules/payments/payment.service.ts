@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import Razorpay from 'razorpay';
 import { sequelize }       from '../../config/database';
 import { Payment, PaymentGatewayStatus, WebhookEvent, WebhookStatus } from '../../models';
 import { Appointment, AppointmentStatus, PaymentStatus } from '../../models';
@@ -31,14 +32,16 @@ export async function initiatePayment(
 
   const amount = Number(appointment.consultation_fee);
 
-  // In production: call Razorpay API to create order
-  // const razorpay = new Razorpay({ key_id: env.RAZORPAY_KEY_ID, key_secret: env.RAZORPAY_KEY_SECRET });
-  // const order = await razorpay.orders.create({ amount: amount * 100, currency: 'INR', receipt: appointmentId });
-
-  // Stub order ID for development
-  const orderId = env.NODE_ENV === 'development'
-    ? `order_dev_${Date.now()}`
-    : 'order_REPLACE_WITH_RAZORPAY';
+  const razorpay = new Razorpay({
+    key_id:     env.RAZORPAY_KEY_ID!,
+    key_secret: env.RAZORPAY_KEY_SECRET!,
+  });
+  const order = await razorpay.orders.create({
+    amount:   Math.round(amount * 100), // paise
+    currency: 'INR',
+    receipt:  appointmentId,
+  });
+  const orderId = order.id;
 
   // Store order ID on appointment
   await appointment.update({ razorpay_order_id: orderId });
