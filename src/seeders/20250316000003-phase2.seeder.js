@@ -1,17 +1,22 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const bcrypt = require('bcryptjs');
 
 module.exports = {
   async up(queryInterface) {
     const now = new Date();
 
     // ── 1. Hospital ───────────────────────────────────────────────────────────
-    const hospitalId     = uuidv4();
+    const hospitalId      = uuidv4();
     const hospitalAdminId = uuidv4();
+
+    const hospitalAdminPasswordHash = await bcrypt.hash('Nashik@123', 12);
 
     await queryInterface.bulkInsert('users', [{
       id: hospitalAdminId, mobile: '9000000002', country_code: '+91',
+      email: 'hospitaladmin@nashikcare.com',
+      password_hash: hospitalAdminPasswordHash,
       otp_secret: null, otp_expires_at: null, otp_attempts: 0,
       role: 'hospital_admin', account_status: 'active',
       last_login_at: null, deleted_at: null, created_at: now, updated_at: now,
@@ -148,8 +153,10 @@ module.exports = {
 
     console.log('✅  Phase 2 seed complete:');
     console.log('   Hospital: Nashik Care Hospital (live)');
-    console.log('   Hospital admin mobile: 9000000002');
-    console.log('   Receptionist mobile:   9000000003');
+    console.log('   Hospital admin mobile:    9000000002');
+    console.log('   Hospital admin email:     hospitaladmin@nashikcare.com');
+    console.log('   Hospital admin password:  Nashik@123');
+    console.log('   Receptionist mobile:      9000000003');
     doctors.forEach((d) => console.log(`   Doctor: ${d.full_name} — ${d.mobile}`));
     console.log('   Run slot generation via POST /api/v1/schedules/generate');
   },

@@ -7,6 +7,7 @@ import {
   DoctorProfile,
   DoctorHospitalAffiliation,
   Hospital, AppointmentApprovalMode,
+  OpdToken,
 }                                         from '../../models';
 import { env }                           from '../../config/env';
 import { ErrorFactory }                  from '../../utils/errors';
@@ -267,7 +268,12 @@ export async function rescheduleAppointment(
 // ── Get appointment ───────────────────────────────────────────────────────────
 export async function getAppointment(appointmentId: string, requesterId: string): Promise<ServiceResponse<object>> {
   const appointment = await Appointment.findByPk(appointmentId, {
-    include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] }],
+    include: [
+      { model: DoctorProfile, as: 'doctor', attributes: ['id', 'full_name', 'specialization'] },
+      { model: Hospital,      as: 'hospital', attributes: ['id', 'name'] },
+      { model: GeneratedSlot, as: 'slot',     attributes: ['slot_datetime'] },
+      { model: OpdToken,      as: 'opdToken', attributes: ['token_number'] },
+    ],
   });
   if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');
   if (appointment.patient_id !== requesterId) throw ErrorFactory.forbidden('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.');

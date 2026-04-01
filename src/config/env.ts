@@ -33,6 +33,7 @@ const envSchema = z.object({
   OTP_MAX_ATTEMPTS:    z.string().default('5').transform(Number),
   OTP_COOLDOWN_SECONDS:z.string().default('60').transform(Number),
   OTP_LOCKOUT_MINUTES: z.string().default('30').transform(Number),
+  OTP_BYPASS_CODE:     z.string().optional(), // dev only — set to bypass SMS
 
   // SMS
   MSG91_AUTH_KEY:    z.string().optional(),
