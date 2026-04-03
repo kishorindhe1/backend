@@ -6,7 +6,7 @@ import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload, UserRole } from '../../types';
 import { asyncHandler }              from '../../utils/asyncHandler';
 import { z }                         from 'zod';
-import { OnboardingStatus, AppointmentApprovalMode } from '../../models';
+import { OnboardingStatus, AppointmentApprovalMode, PaymentCollectionMode } from '../../models';
 
 // ── Safe extractors ───────────────────────────────────────────────────────────
 const param = (req: Request, key: string): string =>
@@ -109,6 +109,21 @@ router.post('/:id/receptionists',
   authenticate, requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
   validate(AddReceptionistSchema),
   asyncHandler(addReceptionist),
+);
+
+router.patch('/:id/payment-collection-mode',
+  authenticate, requireRole(UserRole.HOSPITAL_ADMIN),
+  validate(z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body:   z.object({ mode: z.nativeEnum(PaymentCollectionMode) }),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+    const { mode } = req.body as { mode: PaymentCollectionMode };
+    const result = await HospitalService.updatePaymentCollectionMode(param(req, 'id'), mode, user.sub);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
 );
 
 router.patch('/:id/appointment-approval',

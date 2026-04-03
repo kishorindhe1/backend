@@ -4,7 +4,7 @@ import { renderNotification }           from '../../utils/notificationTemplates'
 import { env }                from '../../config/env';
 import {
   NotificationLog, NotificationChannel, NotificationStatus,
-  UserNotificationPreference,
+  UserNotificationPreference, User, PatientProfile,
 }                             from '../../models';
 import { logger }             from '../../utils/logger';
 import { ServiceResponse, ok } from '../../types';
@@ -29,16 +29,17 @@ export interface NotificationJobPayload {
 
 // ── Quiet-hours bypass config (kept here so service controls business logic) ──
 const BYPASS_QUIET_HOURS: Record<string, boolean> = {
-  otp:                       true,
-  booking_confirmed:         false,
-  booking_cancelled_doctor:  true,
-  booking_cancelled_patient: false,
-  doctor_late:               false,
-  doctor_absent:             true,
-  queue_position_alert:      false,
-  payment_successful:        false,
-  refund_initiated:          false,
-  appointment_reminder:      false,
+  otp:                          true,
+  booking_confirmed:            false,
+  booking_awaiting_approval:    false,
+  booking_cancelled_doctor:     true,
+  booking_cancelled_patient:    false,
+  doctor_late:                  false,
+  doctor_absent:                true,
+  queue_position_alert:         false,
+  payment_successful:           false,
+  refund_initiated:             false,
+  appointment_reminder:         false,
 };
 
 // ── Enqueue a notification ────────────────────────────────────────────────────
@@ -66,7 +67,20 @@ function isInQuietHours(pref: UserNotificationPreference): boolean {
 async function processJob(job: Job<NotificationJobPayload>): Promise<void> {
   const { userId, appointmentId, type, channels, priority, data } = job.data;
 
-  const pref = await UserNotificationPreference.findOne({ where: { user_id: userId } });
+  const [pref, user] = await Promise.all([
+    UserNotificationPreference.findOne({ where: { user_id: userId } }),
+    User.findByPk(userId, {
+      attributes: ['mobile', 'country_code'],
+      include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['email'], required: false }],
+    }),
+  ]);
+
+  // Hydrate contact fields from DB so callers don't need to pass them
+  if (user) {
+    if (!data.mobile) data.mobile = `${user.country_code ?? '+91'}${user.mobile}`;
+    const profile = (user as any).patientProfile as { email?: string } | undefined;
+    if (!data.email && profile?.email) data.email = profile.email;
+  }
 
   const rendered = renderNotification(type, data);
   if (!rendered) { logger.warn('Unknown notification type', { type }); return; }
@@ -116,7 +130,10 @@ async function processJob(job: Job<NotificationJobPayload>): Promise<void> {
     });
 
     try {
-      const sendResult = await sendViaProvider(channel, recipient, renderedBody, rendered.subject);
+      const sendResult = await sendViaProvider(channel, recipient, renderedBody, rendered.subject, {
+        type:          type,
+        appointmentId: appointmentId,
+      });
       await logEntry.update({ status: NotificationStatus.SENT, provider_msg_id: sendResult.msgId, provider: sendResult.provider });
       logger.info('Notification sent', { type, channel, userId });
     } catch (err) {
@@ -132,13 +149,17 @@ async function sendViaProvider(
   recipient: string,
   body:      string,
   subject:   string,
+  extra?:    { type?: string; appointmentId?: string },
 ): Promise<{ msgId: string; provider: string }> {
   if (channel === NotificationChannel.SMS) {
     const result = await sendSMS(recipient, body);
     return result;
   }
   if (channel === NotificationChannel.PUSH) {
-    const result = await sendPush(recipient, 'Upcharify', body);
+    const pushData: Record<string, string> = {};
+    if (extra?.type)          pushData.type           = extra.type;
+    if (extra?.appointmentId) pushData.appointment_id = extra.appointmentId;
+    const result = await sendPush(recipient, subject, body, pushData);
     return { msgId: result.msgId, provider: 'fcm' };
   }
   // Email via AWS SES — body is rendered HTML; strip tags for plain-text part

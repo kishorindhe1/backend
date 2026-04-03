@@ -2,13 +2,17 @@ import crypto from 'crypto';
 import Razorpay from 'razorpay';
 import { sequelize }       from '../../config/database';
 import { Payment, PaymentGatewayStatus, WebhookEvent, WebhookStatus } from '../../models';
-import { Appointment, AppointmentStatus, PaymentStatus } from '../../models';
+import { Appointment, AppointmentStatus, PaymentStatus, DoctorProfile } from '../../models';
 import { env }             from '../../config/env';
 import { ServiceResponse, ok, fail } from '../../types';
 import { incrementCounter } from '../admin/admin.service';
 import { enqueueNotification } from '../notifications/notification.service';
 import { NotificationChannel } from '../../models';
 import { logger }          from '../../utils/logger';
+
+function getRazorpay() {
+  return new Razorpay({ key_id: env.RAZORPAY_KEY_ID!, key_secret: env.RAZORPAY_KEY_SECRET! });
+}
 
 // ── Fee split helper (same rule as appointment service) ───────────────────────
 function calculateFeeSplit(amount: number) {
@@ -32,10 +36,7 @@ export async function initiatePayment(
 
   const amount = Number(appointment.consultation_fee);
 
-  const razorpay = new Razorpay({
-    key_id:     env.RAZORPAY_KEY_ID!,
-    key_secret: env.RAZORPAY_KEY_SECRET!,
-  });
+  const razorpay = getRazorpay();
   const order = await razorpay.orders.create({
     amount:   Math.round(amount * 100), // paise
     currency: 'INR',
@@ -140,6 +141,98 @@ export async function verifyPayment(input: {
   await incrementCounter('payments:success');
 
   return ok({ message: 'Payment confirmed. Appointment is now active.' });
+}
+
+// ── Process refund ────────────────────────────────────────────────────────────
+export async function processRefund(
+  appointmentId: string,
+  requesterId:   string,
+): Promise<ServiceResponse<{ refund_id: string; amount: number; status: string }>> {
+  const appointment = await Appointment.findByPk(appointmentId);
+  if (!appointment) return fail('BOOKING_NOT_FOUND', 'Appointment not found.', 404);
+
+  // Only the patient or an admin can trigger a refund
+  if (appointment.patient_id !== requesterId) {
+    return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.', 403);
+  }
+
+  if (appointment.payment_status !== PaymentStatus.REFUND_PENDING) {
+    if (appointment.payment_status === PaymentStatus.REFUNDED) {
+      return fail('PAYMENT_ALREADY_REFUNDED', 'Refund already processed.', 409);
+    }
+    return fail('PAYMENT_REFUND_NOT_ELIGIBLE', 'This appointment is not eligible for a refund.', 422);
+  }
+
+  const payment = await Payment.findOne({ where: { appointment_id: appointmentId } });
+  if (!payment || !payment.razorpay_payment_id) {
+    return fail('PAYMENT_NOT_FOUND', 'No captured payment found for this appointment.', 404);
+  }
+
+  if (payment.status === PaymentGatewayStatus.REFUNDED) {
+    return fail('PAYMENT_ALREADY_REFUNDED', 'Refund already processed.', 409);
+  }
+
+  const refundAmount = Number(payment.amount);
+
+  if (env.NODE_ENV === 'development') {
+    // Skip real Razorpay call in dev — simulate success
+    logger.debug('💸  [DEV] Simulating refund', { appointmentId, amount: refundAmount });
+    await sequelize.transaction(async (t) => {
+      await payment.update(
+        { status: PaymentGatewayStatus.REFUNDED, refunded_at: new Date(), refund_amount: refundAmount },
+        { transaction: t },
+      );
+      await appointment.update({ payment_status: PaymentStatus.REFUNDED }, { transaction: t });
+    });
+
+    const doctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
+    await enqueueNotification({
+      userId: appointment.patient_id,
+      appointmentId,
+      type: 'refund_initiated',
+      channels: [NotificationChannel.SMS, NotificationChannel.PUSH],
+      priority: 'high',
+      data: { amount: refundAmount, txnId: payment.razorpay_payment_id, doctor: doctor?.full_name ?? 'Doctor' },
+    });
+
+    await incrementCounter('payments:refunds');
+    logger.info('Refund simulated (dev)', { appointmentId, amount: refundAmount });
+    return ok({ refund_id: `refund_dev_${Date.now()}`, amount: refundAmount, status: 'processed' });
+  }
+
+  // Call Razorpay refund API
+  const razorpay = getRazorpay();
+  const refund = await razorpay.payments.refund(payment.razorpay_payment_id, {
+    amount: Math.round(refundAmount * 100), // paise
+    speed:  'normal',
+    notes:  { appointment_id: appointmentId, reason: 'Appointment cancelled' },
+  });
+
+  await sequelize.transaction(async (t) => {
+    await payment.update(
+      {
+        status:        PaymentGatewayStatus.REFUNDED,
+        refunded_at:   new Date(),
+        refund_amount: refundAmount,
+      },
+      { transaction: t },
+    );
+    await appointment.update({ payment_status: PaymentStatus.REFUNDED }, { transaction: t });
+  });
+
+  const doctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
+  await enqueueNotification({
+    userId: appointment.patient_id,
+    appointmentId,
+    type: 'refund_initiated',
+    channels: [NotificationChannel.SMS, NotificationChannel.PUSH],
+    priority: 'high',
+    data: { amount: refundAmount, txnId: refund.id, doctor: doctor?.full_name ?? 'Doctor' },
+  });
+
+  await incrementCounter('payments:refunds');
+  logger.info('Refund processed', { appointmentId, refundId: refund.id, amount: refundAmount });
+  return ok({ refund_id: refund.id, amount: refundAmount, status: refund.status });
 }
 
 // ── Razorpay webhook handler — full idempotency pattern ───────────────────────
@@ -268,6 +361,32 @@ async function processWebhookEvent(
             { payment_status: PaymentStatus.FAILED },
             { where: { id: payment.appointment_id } },
           );
+        }
+      }
+      break;
+    }
+
+    case 'payment.refunded': {
+      const paymentEntity = (payload['payload'] as Record<string, unknown>)?.['payment'] as Record<string, unknown> | undefined;
+      const entity = (paymentEntity?.['entity'] ?? {}) as Record<string, unknown>;
+      const razorpayPaymentId = entity['id'] as string;
+      const refundedAmount    = ((entity['amount_refunded'] as number) ?? 0) / 100;
+
+      if (razorpayPaymentId) {
+        const payment = await Payment.findOne({ where: { razorpay_payment_id: razorpayPaymentId } });
+        if (payment && payment.status !== PaymentGatewayStatus.REFUNDED) {
+          await sequelize.transaction(async (t) => {
+            await payment.update(
+              { status: PaymentGatewayStatus.REFUNDED, refunded_at: new Date(), refund_amount: refundedAmount },
+              { transaction: t },
+            );
+            await Appointment.update(
+              { payment_status: PaymentStatus.REFUNDED },
+              { where: { id: payment.appointment_id }, transaction: t },
+            );
+          });
+          await incrementCounter('payments:refunds');
+          logger.info('Refund confirmed via webhook', { paymentId: payment.id, amount: refundedAmount });
         }
       }
       break;

@@ -117,7 +117,7 @@ export async function getDoctorProfile(doctorProfileId: string): Promise<Service
         where: { is_active: true },
         required: false,
         include: [{ model: Hospital, as: 'hospital',
-          attributes: ['id', 'name', 'city', 'address_line1', 'phone_primary'] }],
+          attributes: ['id', 'name', 'city', 'address_line1', 'phone_primary', 'payment_collection_mode'] }],
       },
     ],
   });

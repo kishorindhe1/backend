@@ -7,6 +7,7 @@ export const BookAppointmentSchema = z.object({
     slot_id:     z.string().uuid('Invalid slot ID'),
     notes:            z.string().max(500).optional(),
     appointment_type: z.enum(['online_booking', 'walk_in', 'follow_up']).optional(),
+    payment_mode:     z.enum(['online_prepaid', 'cash', 'card']).optional(),
   }),
 });
 

@@ -6,7 +6,7 @@ import {
   AppointmentType, PaymentMode, CancellationBy,
   DoctorProfile,
   DoctorHospitalAffiliation,
-  Hospital, AppointmentApprovalMode,
+  Hospital, AppointmentApprovalMode, PaymentCollectionMode,
   OpdToken,
 }                                         from '../../models';
 import { env }                           from '../../config/env';
@@ -33,6 +33,7 @@ export interface BookAppointmentInput {
   slot_id:           string;
   notes?:            string;
   appointment_type?: AppointmentType;
+  payment_mode?:     PaymentMode; // only honoured when hospital.payment_collection_mode = 'patient_choice'
 }
 
 export async function bookAppointment(input: BookAppointmentInput): Promise<ServiceResponse<object>> {
@@ -45,10 +46,16 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
   if (!acquired) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot is currently being booked. Please try another.');
 
   try {
-    // Check hospital's approval mode before the transaction
-    const hospital = await Hospital.findByPk(hospital_id, { attributes: ['appointment_approval'] });
+    // Check hospital settings before the transaction
+    const hospital = await Hospital.findByPk(hospital_id, { attributes: ['appointment_approval', 'payment_collection_mode'] });
     if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
     const isAutoApproval = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
+
+    // Resolve payment mode: patient_choice lets patient pick; otherwise force online_prepaid
+    const isPatientChoice = hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE;
+    const resolvedPaymentMode = isPatientChoice && input.payment_mode
+      ? input.payment_mode
+      : PaymentMode.ONLINE_PREPAID;
 
     const result = await sequelize.transaction(async (t) => {
       // Layer 2 — SELECT FOR UPDATE
@@ -66,16 +73,25 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       const fee    = Number(affiliation.consultation_fee);
       const splits = calcFee(fee);
 
+      // Determine initial appointment status
+      const isCashOrCard = resolvedPaymentMode === PaymentMode.CASH || resolvedPaymentMode === PaymentMode.CARD;
+      let initialStatus: AppointmentStatus;
+      if (!isAutoApproval) {
+        initialStatus = AppointmentStatus.AWAITING_HOSPITAL_APPROVAL;
+      } else if (isCashOrCard) {
+        initialStatus = AppointmentStatus.CONFIRMED; // no online payment needed
+      } else {
+        initialStatus = AppointmentStatus.PENDING;   // awaiting online payment
+      }
+
       // Layer 3 — unique slot_id constraint catches any slip-through
       const appointment = await Appointment.create({
         patient_id, doctor_id, hospital_id, slot_id,
         scheduled_at:     slot.slot_datetime,
-        status:           isAutoApproval
-          ? AppointmentStatus.PENDING
-          : AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
-        payment_status:   PaymentStatus.PENDING,
+        status:           initialStatus,
+        payment_status:   isCashOrCard ? PaymentStatus.PENDING : PaymentStatus.PENDING,
         appointment_type: input.appointment_type ?? AppointmentType.ONLINE_BOOKING,
-        payment_mode:     PaymentMode.ONLINE_PREPAID,
+        payment_mode:     resolvedPaymentMode,
         consultation_fee: fee,
         platform_fee:     splits.platform_fee,
         doctor_payout:    splits.doctor_payout,
@@ -184,13 +200,19 @@ export async function cancelAppointment(
   await redis.del(RedisKeys.availableSlots(appointment.doctor_id, dateStr));
 
   // Notify patient
+  const cancelDoctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
   await enqueueNotification({
     userId: appointment.patient_id,
     appointmentId,
     type: 'booking_cancelled_patient',
     channels: [NotificationChannel.SMS, NotificationChannel.PUSH],
     priority: 'high',
-    data: { name: 'Patient', doctor: 'Doctor', date: appointment.scheduled_at.toDateString() },
+    data: {
+      name:   'Patient',
+      doctor: cancelDoctor?.full_name ?? 'Doctor',
+      date:   appointment.scheduled_at.toDateString(),
+      amount: appointment.consultation_fee ?? 0,
+    },
   });
 
   logger.info('Appointment cancelled', { appointmentId, cancelledBy, refund_eligible });
@@ -360,13 +382,19 @@ export async function rejectAppointment(
   const dateStr = appointment.scheduled_at.toISOString().split('T')[0];
   await redis.del(RedisKeys.availableSlots(appointment.doctor_id, dateStr));
 
+  const rejDoctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
   await enqueueNotification({
     userId:        appointment.patient_id,
     appointmentId: appointment.id,
-    type:          'booking_rejected_hospital',
+    type:          'booking_cancelled_doctor',
     channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
     priority:      'high',
-    data: { name: 'Patient', doctor: 'Doctor', date: appointment.scheduled_at.toDateString() },
+    data: {
+      name:   'Patient',
+      doctor: rejDoctor?.full_name ?? 'Doctor',
+      date:   appointment.scheduled_at.toDateString(),
+      amount: appointment.consultation_fee ?? 0,
+    },
   });
 
   logger.info('Appointment rejected by hospital', { appointmentId, hospitalId, refund_eligible });

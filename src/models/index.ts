@@ -17,7 +17,7 @@
 
 // ── Tier 1 ────────────────────────────────────────────────────────────────────
 export { User }                        from './user.model';
-export { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode } from './hospital.model';
+export { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode, PaymentCollectionMode } from './hospital.model';
 
 // ── Tier 2 ────────────────────────────────────────────────────────────────────
 export { PatientProfile, Gender }      from './patient.model';

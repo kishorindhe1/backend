@@ -1,4 +1,4 @@
-import { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode } from '../../models';
+import { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode, PaymentCollectionMode } from '../../models';
 import { HospitalStaff, StaffRole }                 from '../../models';
 import { User }                from '../../models';
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
@@ -232,6 +232,25 @@ export async function addReceptionist(
     staff_role: StaffRole.RECEPTIONIST, hospital_id: hospitalId,
     message: created ? 'Receptionist added.' : 'Receptionist reactivated.',
   });
+}
+
+// ── Update payment collection mode ────────────────────────────────────────────
+export async function updatePaymentCollectionMode(
+  hospitalId: string,
+  mode:       PaymentCollectionMode,
+  requesterId: string,
+): Promise<ServiceResponse<{ payment_collection_mode: PaymentCollectionMode }>> {
+  const hospital = await Hospital.findByPk(hospitalId);
+  if (!hospital) return fail('HOSPITAL_NOT_FOUND', 'Hospital not found.', 404);
+
+  const staff = await HospitalStaff.findOne({
+    where: { hospital_id: hospitalId, user_id: requesterId, is_active: true },
+  });
+  if (!staff) return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'You are not an admin of this hospital.', 403);
+
+  await hospital.update({ payment_collection_mode: mode });
+  logger.info('Hospital payment collection mode updated', { hospitalId, mode, requesterId });
+  return ok({ payment_collection_mode: hospital.payment_collection_mode });
 }
 
 // ── Update appointment approval mode ──────────────────────────────────────────

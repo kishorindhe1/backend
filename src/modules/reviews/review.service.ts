@@ -1,5 +1,5 @@
 import { DoctorReview } from '../../models/review.model';
-import { Appointment, AppointmentStatus, DoctorProfile } from '../../models';
+import { Appointment, AppointmentStatus, DoctorProfile, PatientProfile } from '../../models';
 import { User } from '../../models';
 import { ServiceResponse, ok, fail } from '../../types';
 import { logger } from '../../utils/logger';
@@ -41,7 +41,7 @@ export async function createReview(input: {
 export async function getDoctorReviews(doctorId: string, page: number, perPage: number): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
   const { rows, count } = await DoctorReview.findAndCountAll({
     where: { doctor_id: doctorId },
-    include: [{ model: User, as: 'patient', attributes: ['id'] }],
+    include: [{ model: User, as: 'patient', attributes: ['id'], include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name'] }] }],
     order:  [['created_at', 'DESC']],
     limit: perPage, offset: (page - 1) * perPage,
   });

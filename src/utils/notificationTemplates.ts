@@ -321,6 +321,29 @@ export const templates: Record<string, TemplateSet> = {
     ),
   },
 
+  // ── Booking awaiting hospital approval ───────────────────────────────────
+  booking_awaiting_approval: {
+    subject: `Appointment Request Received – ${BRAND.name}`,
+    sms: `Hi {{name}}, your appt request with Dr. {{doctor}} on {{date}} at {{time}} is under review. We'll notify you once confirmed. -UPCHARIFY`,
+    html: (d) => layout(
+      'Appointment Request Received',
+      `Your appointment request with Dr. ${d.doctor} is under review.`,
+      `
+      ${alertBox(`&#9203;&nbsp; Your appointment request is awaiting hospital approval.`)}
+      ${h1('Request Under Review')}
+      ${p(`Hi <strong>${String(d.name)}</strong>, your appointment request has been received and is being reviewed by the hospital.`)}
+      ${detailTable([
+        ['Doctor',    `Dr. ${d.doctor}`],
+        ['Date',      String(d.date)],
+        ['Time',      String(d.time)],
+      ])}
+      ${p('You will receive a confirmation notification once the hospital approves your appointment. This usually takes a few minutes.')}
+      ${divider()}
+      ${p('You can check your appointment status anytime in the Upcharify app.', 'color:#9ca3af;font-size:13px;')}
+    `,
+    ),
+  },
+
   // ── Appointment reminder ──────────────────────────────────────────────────
   appointment_reminder: {
     subject: `Appointment Reminder – ${BRAND.name}`,

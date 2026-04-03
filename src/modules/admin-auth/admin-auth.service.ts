@@ -8,6 +8,7 @@ import {
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { ErrorFactory } from '../../utils/errors';
 import { logger } from '../../utils/logger';
+import { sendEmail } from '../../utils/smsProvider';
 
 const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST];
 const TFA_EXPIRY_MINUTES = 10;
@@ -33,12 +34,19 @@ function maskEmail(email: string): string {
 }
 
 async function sendTfaOtpEmail(email: string, otp: string): Promise<void> {
-  if (env.NODE_ENV === 'development') {
-    logger.debug(`📧  Admin 2FA OTP for ${maskEmail(email)}: ${otp}`);
-    return;
-  }
-  // TODO: integrate email provider (SendGrid / SES / SMTP)
-  logger.info('Admin 2FA email sent', { email: maskEmail(email) });
+  const subject  = 'Your Admin Login OTP';
+  const textBody = `Your Upcharify admin login OTP is: ${otp}\n\nThis code expires in ${TFA_EXPIRY_MINUTES} minutes. Do not share it with anyone.`;
+  const htmlBody = `
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:#6366f1;margin-bottom:8px">Admin Login Verification</h2>
+      <p style="color:#475569;margin-bottom:24px">Use the OTP below to complete your sign-in. It expires in <strong>${TFA_EXPIRY_MINUTES} minutes</strong>.</p>
+      <div style="background:#f1f5f9;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px">
+        <span style="font-size:36px;font-weight:900;letter-spacing:8px;color:#0f172a">${otp}</span>
+      </div>
+      <p style="color:#94a3b8;font-size:13px">If you did not request this, please secure your account immediately.</p>
+    </div>`;
+  await sendEmail(email, subject, textBody, htmlBody);
+  logger.info('Admin 2FA OTP email sent', { email: maskEmail(email) });
 }
 
 // ─── service functions ────────────────────────────────────────────────────────

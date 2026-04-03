@@ -9,6 +9,11 @@ export enum AppointmentApprovalMode {
   MANUAL = 'manual',
 }
 
+export enum PaymentCollectionMode {
+  ONLINE_ONLY    = 'online_only',
+  PATIENT_CHOICE = 'patient_choice',
+}
+
 export enum HospitalType {
   CLINIC             = 'clinic',
   NURSING_HOME       = 'nursing_home',
@@ -56,7 +61,8 @@ export class Hospital extends Model<
   declare longitude:         number | null;
 
   // Appointment settings
-  declare appointment_approval: CreationOptional<AppointmentApprovalMode>;
+  declare appointment_approval:      CreationOptional<AppointmentApprovalMode>;
+  declare payment_collection_mode:   CreationOptional<PaymentCollectionMode>;
 
   // Meta
   declare is_verified:       CreationOptional<boolean>;
@@ -98,6 +104,12 @@ Hospital.init(
       type: DataTypes.ENUM(...Object.values(AppointmentApprovalMode)),
       allowNull: false,
       defaultValue: AppointmentApprovalMode.AUTO,
+    },
+
+    payment_collection_mode: {
+      type: DataTypes.ENUM(...Object.values(PaymentCollectionMode)),
+      allowNull: false,
+      defaultValue: PaymentCollectionMode.ONLINE_ONLY,
     },
 
     is_verified:       { type: DataTypes.BOOLEAN,   allowNull: false, defaultValue: false },

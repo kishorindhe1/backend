@@ -231,9 +231,14 @@ export async function sendEmail(
 
 // ── FCM Push ──────────────────────────────────────────────────────────────────
 
-export async function sendPush(deviceToken: string, title: string, body: string): Promise<{ msgId: string }> {
+export async function sendPush(
+  deviceToken: string,
+  title:       string,
+  body:        string,
+  data?:       Record<string, string>,
+): Promise<{ msgId: string }> {
   if (env.NODE_ENV === 'development') {
-    logger.debug(`📲  [PUSH → ${deviceToken.slice(0, 20)}...]: ${title} — ${body}`);
+    logger.debug(`📲  [PUSH → ${deviceToken.slice(0, 20)}...]: ${title} — ${body}`, { data });
     return { msgId: `push_dev_${Date.now()}` };
   }
 
@@ -241,7 +246,8 @@ export async function sendPush(deviceToken: string, title: string, body: string)
   const msgId = await app.messaging().send({
     token:        deviceToken,
     notification: { title, body },
-    android: { priority: 'high', notification: { sound: 'default', channelId: 'upcharify_default' } },
+    data:         data ?? {},
+    android: { priority: 'high', notification: { sound: 'default', channelId: 'upcharify_alerts' } },
     apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
   });
   logger.info('FCM push sent', { msgId, token: deviceToken.slice(0, 20) });

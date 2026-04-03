@@ -5,6 +5,7 @@ import {
   Appointment, AppointmentStatus, PaymentStatus, CancellationBy, PaymentMode, AppointmentType,
   DoctorDelayEvent, DelayStatus, DelayType,
   DoctorHospitalAffiliation,
+  DoctorProfile,
   GeneratedSlot, SlotStatus,
   User,
 }                                     from '../../models';
@@ -153,6 +154,11 @@ export async function reportDoctorDelay(
   });
 
   await invalidateQueueCache(doctorId, date);
+
+  const lateDoc = await DoctorProfile.findByPk(doctorId, { attributes: ['full_name'] });
+  const estimatedTime = new Date(Date.now() + delayMinutes * 60_000)
+    .toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
   // Notify all waiting patients about the delay
   const waitingEntries = await ConsultationQueue.findAll({
     where: { doctor_id: doctorId, queue_date: date, status: QueueStatus.WAITING },
@@ -162,7 +168,7 @@ export async function reportDoctorDelay(
     await enqueueNotification({
       userId: entry.patient_id, appointmentId: entry.appointment_id,
       type: 'doctor_late', channels: [NotificationChannel.SMS, NotificationChannel.PUSH], priority: 'high',
-      data: { name: 'Patient', doctor: 'Doctor', delay: delayMinutes, estimatedTime: 'Updated' },
+      data: { name: 'Patient', doctor: lateDoc?.full_name ?? 'Doctor', delay: delayMinutes, estimatedTime },
     });
   }
   await event.update({ patients_notified: true });
@@ -205,6 +211,8 @@ export async function markDoctorAbsent(
   const cancelledCount = await cancelDoctorDayAppointments(doctorId, hospitalId, date);
   await invalidateQueueCache(doctorId, date);
 
+  const absentDoc = await DoctorProfile.findByPk(doctorId, { attributes: ['full_name'] });
+
   // Notify each cancelled patient
   const cancelledAppts = await Appointment.findAll({
     where: { doctor_id: doctorId, hospital_id: hospitalId, status: AppointmentStatus.CANCELLED, cancelled_at: { [Op.gte]: new Date(Date.now() - 60_000) } },
@@ -214,7 +222,7 @@ export async function markDoctorAbsent(
     await enqueueNotification({
       userId: appt.patient_id, appointmentId: appt.id,
       type: 'doctor_absent', channels: [NotificationChannel.SMS, NotificationChannel.PUSH], priority: 'critical',
-      data: { name: 'Patient', doctor: 'Doctor', date },
+      data: { name: 'Patient', doctor: absentDoc?.full_name ?? 'Doctor', date },
     });
   }
 

@@ -58,11 +58,20 @@ async function razorpayWebhook(req: Request, res: Response): Promise<void> {
   res.status(200).json({ success: true, data: result.data });
 }
 
+async function refundPayment(req: Request, res: Response): Promise<void> {
+  const user = req.user as JwtAccessPayload;
+  const { appointment_id } = req.body as { appointment_id: string };
+  const result = await PaymentService.processRefund(appointment_id, user.sub);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 
 router.post('/initiate',   authenticate, validate(InitiateSchema), asyncHandler(initiatePayment));
 router.post('/verify',     authenticate, validate(VerifySchema),   asyncHandler(verifyPayment));
+router.post('/refund',     authenticate, validate(z.object({ body: z.object({ appointment_id: z.string().uuid() }) })), asyncHandler(refundPayment));
 router.post('/webhook/razorpay', asyncHandler(razorpayWebhook));   // no auth — Razorpay calls this
 
 export default router;
