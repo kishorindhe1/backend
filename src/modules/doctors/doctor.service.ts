@@ -1,4 +1,5 @@
 import { sequelize }        from '../../config/database';
+import { env }              from '../../config/env';
 import { User }              from '../../models';
 import { DoctorProfile, VerificationStatus } from '../../models';
 import { DoctorHospitalAffiliation }         from '../../models';
@@ -214,9 +215,14 @@ export async function createSchedule(
     is_active:             true,
   });
 
-  logger.info('Schedule created', { scheduleId: schedule.id, doctorId: input.doctor_id });
+  // Generate slots immediately so patients can book without waiting for the nightly cron
+  const { generateSlotsForDoctor } = await import('../schedules/schedule.service');
+  const slotResult = await generateSlotsForDoctor(input.doctor_id, input.hospital_id, env.SLOT_GENERATION_DAYS_AHEAD);
+  const generated = slotResult.success ? slotResult.data.generated : 0;
 
-  return ok(schedule);
+  logger.info('Schedule created', { scheduleId: schedule.id, doctorId: input.doctor_id, slotsGenerated: generated });
+
+  return ok({ ...schedule.toJSON(), slots_generated: generated });
 }
 
 // ── Verify doctor (admin action) ──────────────────────────────────────────────
