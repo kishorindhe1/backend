@@ -50,7 +50,7 @@ export async function requestOtp(mobile: string, countryCode = '+91'): Promise<S
     expires_in:       env.OTP_EXPIRY_MINUTES * 60,
     resend_allowed_in:RedisTTL.OTP_COOLDOWN,
     masked_mobile:    maskMobile(mobile),
-    ...(env.NODE_ENV === 'development' ? { dev_otp: otp } : {}),
+    ...(env.OTP_BYPASS_CODE ? { dev_otp: otp } : {}),
   });
 }
 
@@ -73,7 +73,7 @@ export async function verifyOtp(mobile: string, otp: string): Promise<ServiceRes
   if (!user.otp_secret || !user.otp_expires_at) return fail('AUTH_OTP_INVALID', 'No OTP found. Please request a new one.', 401);
   if (user.otp_expires_at < new Date()) { await user.update({ otp_secret: null, otp_expires_at: null }); return fail('AUTH_OTP_EXPIRED', 'OTP has expired.', 401); }
 
-  const isBypass = env.NODE_ENV !== 'production' && env.OTP_BYPASS_CODE && otp === env.OTP_BYPASS_CODE;
+  const isBypass = env.OTP_BYPASS_CODE && otp === env.OTP_BYPASS_CODE;
   const isValid  = isBypass || await verifyOTP(otp, user.otp_secret);
   if (!isValid) {
     const newAttempts = user.otp_attempts + 1;
