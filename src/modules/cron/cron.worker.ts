@@ -34,9 +34,6 @@ export async function scheduleCronJobs(): Promise<void> {
   // Also refresh search index every 5 minutes (availability counts)
   await cronQueue.add('refresh_search_index_5min', { type: 'refresh_search_index' },    { repeat: { pattern: '*/5 * * * *' } });
 
-  // Run slot generation immediately on startup to fill any gaps
-  await cronQueue.add('generate_slots_startup', { type: 'generate_slots' }, { jobId: 'startup_slots' });
-
   logger.info('⏰  Cron jobs scheduled');
 }
 

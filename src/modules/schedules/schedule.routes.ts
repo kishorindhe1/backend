@@ -27,6 +27,11 @@ const GenerateSlotsSchema = z.object({
   }),
 });
 
+const BlockSlotSchema = z.object({
+  params: z.object({ slotId: z.string().uuid() }),
+  body:   z.object({ reason: z.string().min(1).max(200) }),
+});
+
 // ── Controllers ───────────────────────────────────────────────────────────────
 async function deactivateSchedule(req: Request, res: Response): Promise<void> {
   const { scheduleId } = req.params as { scheduleId: string };
@@ -58,6 +63,21 @@ async function triggerSlotGeneration(req: Request, res: Response): Promise<void>
   const result = await ScheduleService.generateSlotsForDoctor(doctor_id, hospital_id, days_ahead);
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   sendCreated(res, result.data);
+}
+
+async function blockSlotHandler(req: Request, res: Response): Promise<void> {
+  const { slotId } = req.params as { slotId: string };
+  const { reason } = req.body as { reason: string };
+  const result = await ScheduleService.blockSlot(slotId, reason);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
+async function unblockSlotHandler(req: Request, res: Response): Promise<void> {
+  const { slotId } = req.params as { slotId: string };
+  const result = await ScheduleService.unblockSlot(slotId);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -93,6 +113,22 @@ router.post(
   requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
   validate(GenerateSlotsSchema),
   asyncHandler(triggerSlotGeneration),
+);
+
+// Block / unblock a slot (admin)
+router.patch(
+  '/slots/:slotId/block',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(BlockSlotSchema),
+  asyncHandler(blockSlotHandler),
+);
+
+router.patch(
+  '/slots/:slotId/unblock',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  asyncHandler(unblockSlotHandler),
 );
 
 export default router;

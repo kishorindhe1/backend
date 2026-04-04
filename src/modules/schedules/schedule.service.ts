@@ -149,6 +149,23 @@ export async function getAvailableSlots(
   return ok(result);
 }
 
+// ── Unblock a slot ────────────────────────────────────────────────────────────
+export async function unblockSlot(
+  slotId: string,
+): Promise<ServiceResponse<{ message: string }>> {
+  const slot = await GeneratedSlot.findByPk(slotId);
+  if (!slot) return fail('SLOT_NOT_FOUND', 'Slot not found.', 404);
+
+  if (slot.status !== SlotStatus.BLOCKED) {
+    return fail('SLOT_NOT_BLOCKED', `Slot is not blocked (status: ${slot.status}).`, 409);
+  }
+
+  await slot.update({ status: SlotStatus.AVAILABLE, blocked_reason: null });
+  await redis.del(RedisKeys.availableSlots(slot.doctor_id, slot.slot_datetime.toISOString().split('T')[0]));
+
+  return ok({ message: 'Slot unblocked successfully.' });
+}
+
 // ── Deactivate a schedule ─────────────────────────────────────────────────────
 export async function deactivateSchedule(
   scheduleId: string,
