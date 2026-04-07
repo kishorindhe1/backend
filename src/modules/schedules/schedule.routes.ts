@@ -19,11 +19,14 @@ const GetSlotsSchema = z.object({
   }),
 });
 
+const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
 const GenerateSlotsSchema = z.object({
   body: z.object({
     doctor_id:   z.string().uuid(),
     hospital_id: z.string().uuid(),
-    days_ahead:  z.number().int().min(1).max(60).optional(),
+    from_date:   z.string().regex(dateRegex, 'from_date must be YYYY-MM-DD'),
+    to_date:     z.string().regex(dateRegex, 'to_date must be YYYY-MM-DD'),
   }),
 });
 
@@ -57,10 +60,10 @@ async function getAvailableSlots(req: Request, res: Response): Promise<void> {
 }
 
 async function triggerSlotGeneration(req: Request, res: Response): Promise<void> {
-  const { doctor_id, hospital_id, days_ahead } = req.body as {
-    doctor_id: string; hospital_id: string; days_ahead?: number;
+  const { doctor_id, hospital_id, from_date, to_date } = req.body as {
+    doctor_id: string; hospital_id: string; from_date: string; to_date: string;
   };
-  const result = await ScheduleService.generateSlotsForDoctor(doctor_id, hospital_id, days_ahead);
+  const result = await ScheduleService.generateSlotsForDoctor(doctor_id, hospital_id, from_date, to_date);
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   sendCreated(res, result.data);
 }

@@ -2,7 +2,6 @@ import { Op } from 'sequelize';
 import { Schedule, DayOfWeek }   from '../../models';
 import { GeneratedSlot, SlotStatus } from '../../models';
 import { DoctorProfile }         from '../../models';
-import { env }                   from '../../config/env';
 import { redis, RedisKeys, RedisTTL } from '../../config/redis';
 import { ServiceResponse, ok, fail }  from '../../types';
 import { logger }                from '../../utils/logger';
@@ -32,11 +31,12 @@ export async function listSchedules(
   return ok(schedules.map((s) => s.toJSON()));
 }
 
-// ── Generate slots for a doctor from today → N days ahead ────────────────────
+// ── Generate slots for a doctor between from_date and to_date ─────────────────
 export async function generateSlotsForDoctor(
   doctorId: string,
   hospitalId: string,
-  daysAhead = env.SLOT_GENERATION_DAYS_AHEAD,
+  fromDate: string,  // YYYY-MM-DD
+  toDate: string,    // YYYY-MM-DD
 ): Promise<ServiceResponse<{ generated: number; skipped: number }>> {
   const schedules = await Schedule.findAll({
     where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true },
@@ -46,15 +46,18 @@ export async function generateSlotsForDoctor(
     return fail('SCHEDULE_NOT_FOUND', 'No active schedule found for this doctor.', 404);
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const start = new Date(`${fromDate}T00:00:00`);
+  const end   = new Date(`${toDate}T00:00:00`);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
+    return fail('INVALID_DATE_RANGE', 'from_date must be a valid date on or before to_date.', 400);
+  }
 
   let generated = 0;
   let skipped   = 0;
 
-  for (let dayOffset = 0; dayOffset <= daysAhead; dayOffset++) {
-    const targetDate = new Date(today);
-    targetDate.setDate(today.getDate() + dayOffset);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const targetDate = new Date(d);
 
     const dayEnum = JS_DAY_TO_ENUM[targetDate.getDay()];
 
