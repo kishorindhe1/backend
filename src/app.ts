@@ -13,6 +13,9 @@ import router                   from './routes/index';
 export function createApp(): Application {
   const app = express();
 
+  // ── 0. Trust proxy — required for correct IP detection behind nginx/ALB ──
+  app.set('trust proxy', 1);
+
   // ── 1. Request ID — must be FIRST ─────────────────────────────────────────
   app.use(requestIdMiddleware);
 

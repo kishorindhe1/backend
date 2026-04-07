@@ -2,7 +2,7 @@ import { Queue, Worker, Job } from 'bullmq';
 import { env }                from '../../config/env';
 import { logger }             from '../../utils/logger';
 
-const connection = { host: env.REDIS_HOST, port: env.REDIS_PORT, password: env.REDIS_PASSWORD };
+const connection = { host: env.REDIS_HOST, port: env.REDIS_PORT, ...(env.REDIS_PASSWORD ? { password: env.REDIS_PASSWORD } : {}) };
 
 // ── Job types ─────────────────────────────────────────────────────────────────
 type CronJobType =
@@ -50,9 +50,15 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
       const affiliations = await DoctorHospitalAffiliation.findAll({ where: { is_active: true } });
       let generated = 0, errors = 0;
 
+      const today     = new Date();
+      const toDateObj = new Date(today);
+      toDateObj.setDate(today.getDate() + env.SLOT_GENERATION_DAYS_AHEAD);
+      const fromDate  = today.toISOString().split('T')[0];
+      const toDate    = toDateObj.toISOString().split('T')[0];
+
       for (const aff of affiliations) {
         try {
-          const result = await generateSlotsForDoctor(aff.doctor_id, aff.hospital_id, env.SLOT_GENERATION_DAYS_AHEAD);
+          const result = await generateSlotsForDoctor(aff.doctor_id, aff.hospital_id, fromDate, toDate);
           if (result.success) generated += result.data.generated;
         } catch (err) {
           errors++;

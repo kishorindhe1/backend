@@ -10,7 +10,7 @@ import { logger }             from '../../utils/logger';
 import { ServiceResponse, ok } from '../../types';
 
 // ── BullMQ queue (uses same Redis connection) ─────────────────────────────────
-const queueConnection = { host: env.REDIS_HOST, port: env.REDIS_PORT, password: env.REDIS_PASSWORD };
+const queueConnection = { host: env.REDIS_HOST, port: env.REDIS_PORT, ...(env.REDIS_PASSWORD ? { password: env.REDIS_PASSWORD } : {}) };
 
 export const notificationQueue = new Queue('notifications', {
   connection: queueConnection,

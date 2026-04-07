@@ -179,7 +179,7 @@ async function mapSymptomsToSpecialisations(query: string): Promise<string[]> {
     where: {
       [Op.or]: [
         { symptom_keyword: { [Op.in]: words } },
-        sequelize.literal(`symptom_aliases && ARRAY[${words.map(w => `'${w.replace(/'/g, "''")}'`).join(',')}]::text[]`),
+        sequelize.literal(`symptom_aliases && ARRAY[${words.map(w => `'${w.replace(/'/g, "''")}'`).join(',')}]::varchar[]`),
       ],
     },
     order: [['priority', 'DESC']],
