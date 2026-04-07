@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
+import { Op }             from 'sequelize';
 import { sequelize }       from '../../config/database';
 import { Payment, PaymentGatewayStatus, WebhookEvent, WebhookStatus } from '../../models';
 import { Appointment, AppointmentStatus, PaymentStatus, DoctorProfile } from '../../models';
@@ -440,4 +441,75 @@ async function processWebhookEvent(
     default:
       logger.debug('Unhandled webhook event type', { eventType });
   }
+}
+
+// ── Payment history for a patient ─────────────────────────────────────────────
+export async function getPaymentHistory(
+  patientId: string,
+  page      = 1,
+  per_page  = 20,
+): Promise<ServiceResponse<{ data: object[]; total: number }>> {
+  const { Hospital } = await import('../../models');
+
+  // All appointments for this patient
+  const appts = await Appointment.findAll({
+    where:      { patient_id: patientId },
+    attributes: ['id', 'scheduled_at', 'appointment_type', 'doctor_id', 'hospital_id'],
+  });
+
+  if (!appts.length) return ok({ data: [], total: 0 });
+
+  const apptIds   = appts.map((a) => a.id);
+  const apptMap   = new Map(appts.map((a) => [String(a.id), a]));
+
+  const statusFilter = { [Op.in]: [PaymentGatewayStatus.CAPTURED, PaymentGatewayStatus.REFUNDED] };
+
+  const [total, payments] = await Promise.all([
+    Payment.count({ where: { appointment_id: { [Op.in]: apptIds }, status: statusFilter } }),
+    Payment.findAll({
+      where:   { appointment_id: { [Op.in]: apptIds }, status: statusFilter },
+      order:   [['created_at', 'DESC']],
+      limit:   per_page,
+      offset:  (page - 1) * per_page,
+    }),
+  ]);
+
+  if (!payments.length) return ok({ data: [], total });
+
+  // Fetch doctor + hospital info in bulk
+  const doctorIds   = [...new Set(appts.map((a) => a.doctor_id))];
+  const hospitalIds = [...new Set(appts.map((a) => a.hospital_id))];
+
+  const [doctors, hospitals] = await Promise.all([
+    DoctorProfile.findAll({ where: { id: { [Op.in]: doctorIds } }, attributes: ['id', 'full_name', 'specialization'] }),
+    Hospital.findAll({ where: { id: { [Op.in]: hospitalIds } }, attributes: ['id', 'name'] }),
+  ]);
+
+  const doctorMap   = new Map(doctors.map((d) => [d.id, d]));
+  const hospitalMap = new Map((hospitals as any[]).map((h) => [h.id, h]));
+
+  const data = payments.map((p) => {
+    const appt     = apptMap.get(String(p.appointment_id));
+    const doctor   = appt ? doctorMap.get(appt.doctor_id)     : null;
+    const hospital = appt ? hospitalMap.get(appt.hospital_id) : null;
+    return {
+      id:                  p.id,
+      amount:              Number(p.amount),
+      currency:            p.currency,
+      status:              p.status,
+      razorpay_payment_id: p.razorpay_payment_id,
+      captured_at:         p.captured_at,
+      refunded_at:         p.refunded_at,
+      refund_amount:       p.refund_amount ? Number(p.refund_amount) : null,
+      appointment: appt ? {
+        id:               appt.id,
+        scheduled_at:     appt.scheduled_at,
+        appointment_type: appt.appointment_type,
+      } : null,
+      doctor:   doctor   ? { full_name: (doctor as any).full_name,   specialization: (doctor as any).specialization } : null,
+      hospital: hospital ? { name: (hospital as any).name } : null,
+    };
+  });
+
+  return ok({ data, total });
 }

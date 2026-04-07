@@ -66,9 +66,19 @@ async function refundPayment(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function paymentHistory(req: Request, res: Response): Promise<void> {
+  const user     = req.user as JwtAccessPayload;
+  const page     = Math.max(1, parseInt(String(req.query.page     ?? 1)));
+  const per_page = Math.min(50, Math.max(1, parseInt(String(req.query.per_page ?? 20))));
+  const result   = await PaymentService.getPaymentHistory(user.sub, page, per_page);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 
+router.get ('/history',    authenticate, asyncHandler(paymentHistory));
 router.post('/initiate',   authenticate, validate(InitiateSchema), asyncHandler(initiatePayment));
 router.post('/verify',     authenticate, validate(VerifySchema),   asyncHandler(verifyPayment));
 router.post('/refund',     authenticate, validate(z.object({ body: z.object({ appointment_id: z.string().uuid() }) })), asyncHandler(refundPayment));
