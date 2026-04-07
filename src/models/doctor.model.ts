@@ -70,7 +70,16 @@ DoctorProfile.init(
     experience_years:  { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     languages_spoken:  { type: DataTypes.ARRAY(DataTypes.STRING), allowNull: false, defaultValue: ['english'] },
     gender:            { type: DataTypes.STRING(20), allowNull: true },
-    profile_photo_url: { type: DataTypes.STRING(500), allowNull: true },
+    profile_photo_url: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+      get() {
+        const stored = this.getDataValue('profile_photo_url');
+        if (stored) return stored;
+        const name = this.getDataValue('full_name') ?? 'Doctor';
+        return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=4F46E5&color=fff&size=200&bold=true&rounded=true`;
+      },
+    },
     bio:               { type: DataTypes.TEXT, allowNull: true },
 
     nmc_registration_number: { type: DataTypes.STRING(50),  allowNull: true },

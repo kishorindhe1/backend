@@ -97,8 +97,15 @@ export async function blacklistToken(jti: string, expiresAt: number): Promise<vo
 }
 
 // ── Store refresh token in Redis (for invalidation on logout) ────────────────
-export async function storeRefreshToken(userId: string, jti: string): Promise<void> {
-  // Store jti so we can invalidate all refresh tokens on logout
+// Accepts either the full JWT string or a raw JTI — decodes if necessary
+export async function storeRefreshToken(userId: string, refreshTokenOrJti: string): Promise<void> {
+  let jti = refreshTokenOrJti;
+  // If it looks like a JWT (contains dots), decode it to extract the JTI
+  if (refreshTokenOrJti.includes('.')) {
+    const payload = jwt.decode(refreshTokenOrJti) as JwtRefreshPayload | null;
+    if (!payload?.jti) return;
+    jti = payload.jti;
+  }
   const key = RedisKeys.refreshToken(userId);
   await redis.setex(key, 7 * 24 * 60 * 60, jti); // 7 days
 }

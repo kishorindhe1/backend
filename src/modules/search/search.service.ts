@@ -379,6 +379,7 @@ export async function searchDoctors(filters: SearchFilters): Promise<ServiceResp
       doctor_id:        entry.doctor_id,
       hospital_id:      entry.hospital_id,
       name:             entry.doctor_name,
+      profile_photo_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(entry.doctor_name)}&background=4F46E5&color=fff&size=200&bold=true&rounded=true`,
       specialization:   entry.specialization,
       qualifications:   entry.qualifications,
       experience_years: entry.experience_years,
