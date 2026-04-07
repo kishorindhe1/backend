@@ -74,6 +74,10 @@ const envSchema = z.object({
 
   // AWS SNS SMS
   AWS_SNS_SENDER_ID:     z.string().default('UPCHARY'),   // registered DLT sender ID (max 11 chars)
+
+  // GST / Invoice
+  COMPANY_GSTIN:         z.string().optional(),  // e.g. 27AABCU9603R1ZX
+  COMPANY_ADDRESS:       z.string().optional(),  // shown on invoice footer
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -368,6 +368,102 @@ export const templates: Record<string, TemplateSet> = {
   },
 };
 
+// ─── GST Invoice ─────────────────────────────────────────────────────────────
+
+export interface InvoiceData {
+  invoiceNumber:   string
+  invoiceDate:     string
+  patientName:     string
+  doctor:          string
+  hospital:        string
+  appointmentDate: string
+  amount:          number
+  txnId:           string
+  gstin?:          string
+  address?:        string
+}
+
+export function gstInvoiceSubject(invoiceNumber: string): string {
+  return `Tax Invoice ${invoiceNumber} – ${BRAND.name}`;
+}
+
+export function buildGstInvoiceHtml(d: InvoiceData): string {
+  const gstinRow  = d.gstin   ? `<tr><td style="padding:6px 0;font-size:12px;color:#6b7280;width:45%;">Supplier GSTIN</td><td style="padding:6px 0;font-size:12px;color:#111827;font-weight:600;">${d.gstin}</td></tr>` : '';
+  const addrRow   = d.address ? `<tr><td style="padding:6px 0;font-size:12px;color:#6b7280;">Address</td><td style="padding:6px 0;font-size:12px;color:#374151;">${d.address}</td></tr>` : '';
+
+  return layout(
+    `Tax Invoice ${d.invoiceNumber}`,
+    `Invoice ₹${d.amount} — Medical Consultation with Dr. ${d.doctor}`,
+    `
+    ${greenBox('&#10003;&nbsp; Payment received. Your tax invoice is attached below.')}
+
+    <!-- Invoice header -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
+      <tr>
+        <td style="vertical-align:top;">
+          <p style="margin:0;font-size:18px;font-weight:700;color:#111827;">TAX INVOICE</p>
+          <p style="margin:4px 0 0;font-size:12px;color:#6b7280;">Healthcare Services</p>
+        </td>
+        <td style="vertical-align:top;text-align:right;">
+          <table cellpadding="0" cellspacing="0">
+            ${gstinRow}
+            ${addrRow}
+            <tr><td style="padding:6px 0;font-size:12px;color:#6b7280;width:45%;">Invoice No.</td><td style="padding:6px 0;font-size:12px;color:#111827;font-weight:600;text-align:left;padding-left:12px;">${d.invoiceNumber}</td></tr>
+            <tr><td style="padding:6px 0;font-size:12px;color:#6b7280;">Invoice Date</td><td style="padding:6px 0;font-size:12px;color:#111827;font-weight:600;text-align:left;padding-left:12px;">${d.invoiceDate}</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+
+    ${divider()}
+
+    <!-- Billed to -->
+    <p style="margin:0 0 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;color:#9ca3af;">Billed To</p>
+    <p style="margin:0 0 20px;font-size:14px;font-weight:600;color:#111827;">${d.patientName}</p>
+
+    <!-- Line items -->
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;margin-bottom:16px;">
+      <thead>
+        <tr style="background:#f3f4f6;">
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#6b7280;text-align:left;">Description</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#6b7280;text-align:left;">SAC</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#6b7280;text-align:left;">GST</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#6b7280;text-align:right;">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="padding:12px 14px;font-size:13px;color:#111827;border-top:1px solid #f3f4f6;">
+            Medical Consultation<br/>
+            <span style="font-size:12px;color:#6b7280;">Dr. ${d.doctor} · ${d.hospital}</span><br/>
+            <span style="font-size:12px;color:#6b7280;">${d.appointmentDate}</span>
+          </td>
+          <td style="padding:12px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">9993</td>
+          <td style="padding:12px 14px;font-size:13px;border-top:1px solid #f3f4f6;">
+            <span style="background:#dcfce7;color:#15803d;font-size:11px;font-weight:600;padding:2px 8px;border-radius:9999px;">Exempt</span>
+          </td>
+          <td style="padding:12px 14px;font-size:13px;font-weight:600;color:#111827;text-align:right;border-top:1px solid #f3f4f6;">&#8377;${d.amount.toFixed(2)}</td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr style="background:#f9fafb;">
+          <td colspan="3" style="padding:12px 14px;font-size:14px;font-weight:700;color:#111827;text-align:right;border-top:1px solid #e5e7eb;">Total Paid</td>
+          <td style="padding:12px 14px;font-size:15px;font-weight:800;color:${BRAND.color};text-align:right;border-top:1px solid #e5e7eb;">&#8377;${d.amount.toFixed(2)}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <p style="margin:0 0 20px;font-size:12px;color:#9ca3af;line-height:1.6;">
+      Healthcare consultation services are exempt from GST under SAC 9993 as per the CGST Act, 2017.<br/>
+      Transaction ID: <strong style="color:#374151;">${d.txnId}</strong>
+    </p>
+
+    ${divider()}
+    ${p('Please keep this invoice for your records. For any queries, contact us at <a href="mailto:' + BRAND.support + '" style="color:' + BRAND.color + ';">' + BRAND.support + '</a>', 'font-size:13px;color:#9ca3af;')}
+    `,
+  );
+}
+
 // ─── Render helper ────────────────────────────────────────────────────────────
 
 /** Returns { sms, subject, htmlBody } rendered with data. */

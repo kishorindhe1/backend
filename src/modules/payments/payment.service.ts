@@ -9,6 +9,8 @@ import { incrementCounter } from '../admin/admin.service';
 import { enqueueNotification } from '../notifications/notification.service';
 import { NotificationChannel } from '../../models';
 import { logger }          from '../../utils/logger';
+import { sendEmail }       from '../../utils/smsProvider';
+import { buildGstInvoiceHtml, gstInvoiceSubject } from '../../utils/notificationTemplates';
 
 function getRazorpay() {
   return new Razorpay({ key_id: env.RAZORPAY_KEY_ID!, key_secret: env.RAZORPAY_KEY_SECRET! });
@@ -125,18 +127,61 @@ export async function verifyPayment(input: {
     doctorPayout: splits.doctor_payout,
   });
 
-  // Fetch patient_id to send notification
-  const appt = await Appointment.findByPk(payment.appointment_id, { attributes: ['patient_id', 'doctor_id'] });
+  // Fetch appointment details for notifications
+  const { User, PatientProfile, Hospital } = await import('../../models');
+  const appt = await Appointment.findByPk(payment.appointment_id, {
+    attributes: ['patient_id', 'doctor_id', 'hospital_id', 'scheduled_at', 'consultation_fee'],
+  });
+
   if (appt) {
-    const doc = await (await import('../../models')).DoctorProfile.findByPk(appt.doctor_id, { attributes: ['full_name'] });
+    const [doc, hospital, patientUser] = await Promise.all([
+      DoctorProfile.findByPk(appt.doctor_id, { attributes: ['full_name'] }),
+      Hospital.findByPk(appt.hospital_id, { attributes: ['name'] }),
+      User.findByPk(appt.patient_id, {
+        include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name', 'email'] }],
+      }),
+    ]);
+
+    const doctorName  = doc?.full_name ?? 'Doctor';
+    const hospitalName = (hospital as any)?.name ?? '—';
+    const patientProfile = (patientUser as any)?.patientProfile;
+    const patientName = patientProfile?.full_name ?? 'Patient';
+    const patientEmail = patientProfile?.email as string | undefined;
+
+    // SMS + push notification
     await enqueueNotification({
       userId:        appt.patient_id,
       appointmentId: String(payment.appointment_id),
       type:          'payment_successful',
       channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
       priority:      'high',
-      data: { amount: Number(payment.amount), doctor: doc?.full_name ?? 'Doctor' },
+      data: { amount: Number(payment.amount), doctor: doctorName },
     });
+
+    // GST invoice email (only if patient has an email on file)
+    if (patientEmail) {
+      const invoiceDate    = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+      const appointmentDate = new Date(appt.scheduled_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const invoiceNumber  = `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(payment.appointment_id).slice(0, 8).toUpperCase()}`;
+
+      const html = buildGstInvoiceHtml({
+        invoiceNumber,
+        invoiceDate,
+        patientName,
+        doctor:          doctorName,
+        hospital:        hospitalName,
+        appointmentDate,
+        amount:          Number(payment.amount),
+        txnId:           razorpay_payment_id,
+        gstin:           env.COMPANY_GSTIN,
+        address:         env.COMPANY_ADDRESS,
+      });
+
+      const plainText = `Tax Invoice ${invoiceNumber}\nDate: ${invoiceDate}\nBilled to: ${patientName}\nDoctor: Dr. ${doctorName}\nHospital: ${hospitalName}\nAppointment: ${appointmentDate}\nAmount Paid: Rs.${Number(payment.amount).toFixed(2)}\nTransaction ID: ${razorpay_payment_id}\nGST: Exempt (SAC 9993 - Healthcare Services)`;
+
+      await sendEmail(patientEmail, gstInvoiceSubject(invoiceNumber), plainText, html)
+        .catch((err) => logger.warn('GST invoice email failed', { appointmentId: payment.appointment_id, err }));
+    }
   }
   await incrementCounter('payments:success');
 
