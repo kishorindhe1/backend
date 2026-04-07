@@ -134,18 +134,26 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
 
 // ── List live hospitals ───────────────────────────────────────────────────────
 export async function listHospitals(filters: {
-  city?:   string;
-  lat?:    number;
-  lng?:    number;
-  page:    number;
-  perPage: number;
+  q?:            string;
+  city?:         string;
+  hospital_type?: string;
+  lat?:          number;
+  lng?:          number;
+  page:          number;
+  perPage:       number;
 }): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
   const { Op } = await import('sequelize');
   const where: Record<string, unknown> = { onboarding_status: OnboardingStatus.LIVE };
 
   const hasCoords = filters.lat != null && filters.lng != null;
 
-  if (!hasCoords && filters.city) {
+  if (filters.hospital_type) {
+    where.hospital_type = filters.hospital_type;
+  }
+
+  if (filters.q) {
+    where.name = { [Op.iLike]: `%${filters.q}%` };
+  } else if (!hasCoords && filters.city) {
     // City-only filter (old behaviour)
     where.city = { [Op.iLike]: `%${filters.city}%` };
   }

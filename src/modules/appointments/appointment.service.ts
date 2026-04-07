@@ -306,7 +306,10 @@ export async function getAppointment(appointmentId: string, requesterId: string)
 export async function getPatientAppointments(patientId: string, page = 1, perPage = 20): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
   const { rows, count } = await Appointment.findAndCountAll({
     where:   { patient_id: patientId },
-    include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] }],
+    include: [
+      { model: DoctorProfile, as: 'doctor',   attributes: ['full_name', 'specialization'] },
+      { model: Hospital,      as: 'hospital', attributes: ['name'] },
+    ],
     order:   [['scheduled_at', 'DESC']],
     limit: perPage, offset: (page - 1) * perPage,
   });
