@@ -1,4 +1,6 @@
 import { Router, Request, Response } from 'express';
+import { DoctorProfile, Hospital, DoctorReview } from '../models';
+import { VerificationStatus } from '../models/doctor.model';
 import authRoutes          from '../modules/auth/auth.routes';
 import patientRoutes       from '../modules/patients/patient.routes';
 import hospitalRoutes      from '../modules/hospitals/hospital.routes';
@@ -16,6 +18,31 @@ import adminAuthRoutes     from '../modules/admin-auth/admin-auth.routes';
 import reviewRoutes        from '../modules/reviews/review.routes';
 
 const router = Router();
+
+// ── Public platform stats (hero card on home screen) ─────────────────────────
+router.get('/stats', async (_req: Request, res: Response) => {
+  try {
+    const [totalDoctors, totalHospitals, ratingRow] = await Promise.all([
+      DoctorProfile.count({ where: { verification_status: VerificationStatus.APPROVED, is_active: true } }),
+      Hospital.count({ where: { onboarding_status: 'live' } }),
+      DoctorReview.findOne({
+        attributes: [[DoctorReview.sequelize!.fn('AVG', DoctorReview.sequelize!.col('rating')), 'avg_rating']],
+        raw: true,
+      }),
+    ]);
+    const avgRating = parseFloat((ratingRow as any)?.avg_rating ?? '0') || 0;
+    res.json({
+      success: true,
+      data: {
+        total_doctors:   totalDoctors,
+        total_hospitals: totalHospitals,
+        avg_rating:      Math.round(avgRating * 10) / 10,
+      },
+    });
+  } catch {
+    res.json({ success: true, data: { total_doctors: 0, total_hospitals: 0, avg_rating: 0 } });
+  }
+});
 
 router.get('/health', (_req: Request, res: Response) => {
   res.json({

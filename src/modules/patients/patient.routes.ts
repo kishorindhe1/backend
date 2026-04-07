@@ -11,7 +11,7 @@ import {
 import { asyncHandler } from '../../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload } from '../../types';
-import { RecordType } from '../../models';
+import { RecordType, Appointment, DoctorReview } from '../../models';
 import { z } from 'zod';
 
 const router = Router();
@@ -25,6 +25,16 @@ router.use(authenticate);
  * @access  Private
  */
 router.get('/me', asyncHandler(PatientController.getMyProfile));
+
+router.get('/me/stats', asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user as JwtAccessPayload;
+  const [totalAppointments, uniqueDoctors, totalReviews] = await Promise.all([
+    Appointment.count({ where: { patient_id: user.sub } }),
+    Appointment.count({ where: { patient_id: user.sub }, distinct: true, col: 'doctor_id' } as any),
+    DoctorReview.count({ where: { patient_id: user.sub } }),
+  ]);
+  sendSuccess(res, { total_appointments: totalAppointments, unique_doctors: uniqueDoctors, total_reviews: totalReviews });
+}));
 
 /**
  * @route   POST /api/v1/patients/me/complete-profile
