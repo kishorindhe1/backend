@@ -20,6 +20,7 @@ import { ErrorFactory }                 from '../../utils/errors';
 import { ServiceResponse, ok, fail }    from '../../types';
 import { logger }                       from '../../utils/logger';
 import { enqueueNotification }          from '../notifications/notification.service';
+import { NotificationChannel }          from '../../models';
 
 // ── Platform health snapshot (reads from Redis live counters) ─────────────────
 export async function getPlatformHealth(): Promise<ServiceResponse<object>> {
@@ -502,7 +503,7 @@ export async function sendAppointmentReminder(
   await enqueueNotification({
     userId:        patient.id,
     type:          'appointment_reminder',
-    channels:      ['push', 'sms'],
+    channels:      [NotificationChannel.PUSH, NotificationChannel.SMS],
     priority:      'high',
     appointmentId,
     data: {

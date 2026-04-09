@@ -100,7 +100,7 @@ router.post(
     if (contentType.includes('multipart/form-data')) {
       // Handle actual file upload
       await new Promise<void>((resolve, reject) =>
-        uploadHealthRecordFile(req, res, (err) => (err ? reject(err) : resolve())),
+        uploadHealthRecordFile(req, res, (err: unknown) => (err ? reject(err) : resolve())),
       );
 
       const file = (req as any).file as Express.Multer.File | undefined;
