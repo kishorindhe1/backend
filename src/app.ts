@@ -2,6 +2,7 @@ import express, { Application } from 'express';
 import cors    from 'cors';
 import helmet  from 'helmet';
 import morgan  from 'morgan';
+import path    from 'path';
 import { requestIdMiddleware }  from './middlewares/requestId.middleware';
 import { globalRateLimiter }    from './middlewares/rateLimit.middleware';
 import { errorMiddleware, notFoundMiddleware } from './middlewares/error.middleware';
@@ -49,6 +50,9 @@ export function createApp(): Application {
 
   // ── 8. Swagger docs (dev/staging only)
   setupSwagger(app);
+
+  // ── 8. Static files — uploaded health records ────────────────────────────
+  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
   // ── 8. API routes ─────────────────────────────────────────────────────────
   app.use('/api/v1', router);

@@ -54,7 +54,10 @@ const envSchema = z.object({
   RAZORPAY_WEBHOOK_SECRET:z.string().optional(),
 
   // Platform fee
-  PLATFORM_FEE_PERCENTAGE:z.string().default('2').transform(Number),
+  PLATFORM_FEE_PERCENTAGE:   z.string().default('2').transform(Number),
+
+  // Cancellation policy: minimum hours before appointment for refund eligibility
+  REFUND_WINDOW_HOURS: z.string().default('2').transform(Number),
 
   // Slot generation
   SLOT_GENERATION_DAYS_AHEAD: z.string().default('30').transform(Number),

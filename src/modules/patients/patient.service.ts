@@ -66,13 +66,28 @@ export async function createHealthRecord(userId: string, input: {
   return ok(record);
 }
 
-export async function getHealthRecords(userId: string, page: number, perPage: number): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+export async function getHealthRecords(
+  userId: string,
+  page: number,
+  perPage: number,
+  recordType?: string,
+): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const where: Record<string, unknown> = { patient_id: userId };
+  if (recordType) where.record_type = recordType;
+
   const { rows, count } = await HealthRecord.findAndCountAll({
-    where:  { patient_id: userId },
+    where,
     order:  [['created_at', 'DESC']],
     limit: perPage, offset: (page - 1) * perPage,
   });
-  return ok({ rows, count });
+
+  // Map to the field names expected by the mobile app
+  const mapped = rows.map(r => {
+    const json = r.toJSON() as Record<string, unknown>;
+    return { ...json, name: json.title, recorded_at: json.record_date };
+  });
+
+  return ok({ rows: mapped, count });
 }
 
 export async function getHealthRecord(userId: string, recordId: string): Promise<ServiceResponse<object>> {

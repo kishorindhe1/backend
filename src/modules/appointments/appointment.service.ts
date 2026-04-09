@@ -177,7 +177,10 @@ export async function cancelAppointment(
   if (appointment.status === AppointmentStatus.CANCELLED) throw ErrorFactory.conflict('BOOKING_ALREADY_CANCELLED', 'This appointment is already cancelled.');
   if ([AppointmentStatus.COMPLETED, AppointmentStatus.IN_PROGRESS].includes(appointment.status)) throw ErrorFactory.unprocessable('BOOKING_CANNOT_CANCEL', 'Cannot cancel a completed or in-progress appointment.');
 
-  const refund_eligible = appointment.payment_status === PaymentStatus.CAPTURED;
+  // Refund only if payment was captured AND cancellation is outside the REFUND_WINDOW_HOURS
+  const hoursUntilAppt  = (new Date(appointment.scheduled_at).getTime() - Date.now()) / (1000 * 60 * 60);
+  const pastDeadline    = hoursUntilAppt < env.REFUND_WINDOW_HOURS;
+  const refund_eligible = appointment.payment_status === PaymentStatus.CAPTURED && !pastDeadline;
 
   await sequelize.transaction(async (t) => {
     await appointment.update({

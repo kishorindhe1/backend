@@ -1,4 +1,4 @@
-import { Op }                          from 'sequelize';
+import { Op, QueryTypes }               from 'sequelize';
 import { sequelize }                    from '../../config/database';
 import { redis }                        from '../../config/redis';
 import {
@@ -19,6 +19,7 @@ import { UserRole, AccountStatus } from '../../types';
 import { ErrorFactory }                 from '../../utils/errors';
 import { ServiceResponse, ok, fail }    from '../../types';
 import { logger }                       from '../../utils/logger';
+import { enqueueNotification }          from '../notifications/notification.service';
 
 // ── Platform health snapshot (reads from Redis live counters) ─────────────────
 export async function getPlatformHealth(): Promise<ServiceResponse<object>> {
@@ -194,9 +195,20 @@ export async function listDoctors(filters: {
 
   const { rows, count } = await DoctorProfile.findAndCountAll({
     where,
-    include: [{ model: User, as: 'user', attributes: ['mobile', 'account_status'] }],
+    include: [
+      { model: User, as: 'user', attributes: ['mobile', 'account_status'] },
+      {
+        model: DoctorHospitalAffiliation,
+        as: 'affiliations',
+        where: { is_active: true },
+        required: false,
+        attributes: ['hospital_id', 'consultation_fee', 'is_primary', 'department', 'room_number'],
+        include: [{ model: Hospital, as: 'hospital', attributes: ['id', 'name', 'city'] }],
+      },
+    ],
     order: [['created_at', 'DESC']],
     limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+    distinct: true,
   });
   return ok({ rows, count });
 }
@@ -461,6 +473,54 @@ export async function listAppointments(filters: {
   return ok({ rows, count });
 }
 
+// ── Send appointment reminder push notification ───────────────────────────────
+export async function sendAppointmentReminder(
+  appointmentId: string,
+  adminId: string,
+): Promise<ServiceResponse<object>> {
+  const appt = await Appointment.findByPk(appointmentId, {
+    include: [
+      { model: DoctorProfile, as: 'doctor',   attributes: ['full_name'] },
+      { model: User,          as: 'patient',  attributes: ['id', 'mobile'] },
+      { model: Hospital,      as: 'hospital', attributes: ['name'] },
+    ],
+  });
+  if (!appt) return fail('APPOINTMENT_NOT_FOUND', 'Appointment not found.', 404);
+
+  const notSendable = ['cancelled', 'completed', 'missed'];
+  if (notSendable.includes(appt.status)) {
+    return fail('INVALID_STATUS', `Cannot send reminder for a ${appt.status} appointment.`, 400);
+  }
+
+  const patient  = (appt as any).patient  as User;
+  const doctor   = (appt as any).doctor   as DoctorProfile;
+  const hospital = (appt as any).hospital as Hospital;
+
+  const scheduledAt  = new Date(appt.scheduled_at);
+  const hoursUntil   = Math.max(0, Math.round((scheduledAt.getTime() - Date.now()) / 3_600_000));
+
+  await enqueueNotification({
+    userId:        patient.id,
+    type:          'appointment_reminder',
+    channels:      ['push', 'sms'],
+    priority:      'high',
+    appointmentId,
+    data: {
+      mobile:   `+91${patient.mobile}`,
+      name:     patient.mobile,
+      doctor:   doctor?.full_name ?? 'Your Doctor',
+      hospital: hospital?.name ?? 'the hospital',
+      date:     scheduledAt.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }),
+      time:     scheduledAt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      token:    '—',
+      hours:    hoursUntil,
+    },
+  });
+
+  logger.info('Admin triggered appointment reminder', { appointmentId, adminId });
+  return ok({ message: 'Reminder sent successfully.' });
+}
+
 // ── Scoped financial summary (with optional hospital scope) ───────────────────
 export async function getScopedFinancialSummary(
   period:     'today' | 'week' | 'month',
@@ -524,9 +584,20 @@ export async function listDoctorsScoped(filters: {
 
     const { rows, count } = await DoctorProfile.findAndCountAll({
       where,
-      include: [{ model: User, as: 'user', attributes: ['mobile', 'account_status'] }],
+      include: [
+        { model: User, as: 'user', attributes: ['mobile', 'account_status'] },
+        {
+          model: DoctorHospitalAffiliation,
+          as: 'affiliations',
+          where: { is_active: true },
+          required: false,
+          attributes: ['hospital_id', 'consultation_fee', 'is_primary', 'department', 'room_number'],
+          include: [{ model: Hospital, as: 'hospital', attributes: ['id', 'name', 'city'] }],
+        },
+      ],
       order: [['created_at', 'DESC']],
       limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+      distinct: true,
     });
     return ok({ rows, count });
   }
@@ -569,6 +640,126 @@ export async function getAuditLogs(filters: {
     limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
   });
   return ok({ rows, count });
+}
+
+// ── Set primary hospital for a doctor ────────────────────────────────────────
+export async function setPrimaryHospital(
+  doctorId:   string,
+  hospitalId: string,
+  adminId:    string,
+): Promise<ServiceResponse<object>> {
+  const affil = await DoctorHospitalAffiliation.findOne({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true },
+  });
+  if (!affil) return fail('AFFILIATION_NOT_FOUND', 'Doctor is not affiliated with this hospital.', 404);
+
+  // Clear current primary, then set new one
+  await DoctorHospitalAffiliation.update(
+    { is_primary: false },
+    { where: { doctor_id: doctorId } },
+  );
+  await affil.update({ is_primary: true });
+
+  await AdminAuditLog.create({
+    admin_id:      adminId,
+    action:        AdminAction.DOCTOR_REACTIVATED, // reuse closest existing action
+    resource_type: 'doctor_affiliation',
+    resource_id:   doctorId,
+    meta:          { set_primary_hospital: hospitalId },
+    ip_address:    null,
+  });
+
+  return ok({ message: 'Primary hospital updated.', hospital_id: hospitalId });
+}
+
+// ── Per-doctor analytics stats ────────────────────────────────────────────────
+export async function getDoctorStats(doctorId: string): Promise<ServiceResponse<object>> {
+  const doctor = await DoctorProfile.findByPk(doctorId, {
+    attributes: ['full_name', 'reliability_score', 'on_time_rate', 'cancellation_rate', 'completion_rate', 'avg_consultation_minutes'],
+  });
+  if (!doctor) return fail('DOCTOR_NOT_FOUND', 'Doctor not found.', 404);
+
+  const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+
+  const { DoctorReview } = await import('../../models');
+
+  const [totalAppointments, completedAppointments, cancelledAppointments, reviewRow] = await Promise.all([
+    Appointment.count({ where: { doctor_id: doctorId, scheduled_at: { [Op.gte]: ninetyDaysAgo } } }),
+    Appointment.count({ where: { doctor_id: doctorId, status: AppointmentStatus.COMPLETED, scheduled_at: { [Op.gte]: ninetyDaysAgo } } }),
+    Appointment.count({ where: { doctor_id: doctorId, status: AppointmentStatus.CANCELLED, scheduled_at: { [Op.gte]: ninetyDaysAgo } } }),
+    DoctorReview.findOne({
+      where: { doctor_id: doctorId },
+      attributes: [
+        [DoctorReview.sequelize!.fn('AVG', DoctorReview.sequelize!.col('rating')), 'avg_rating'],
+        [DoctorReview.sequelize!.fn('COUNT', DoctorReview.sequelize!.col('id')),   'review_count'],
+      ],
+      raw: true,
+    }),
+  ]);
+
+  const avg_rating   = Math.round((parseFloat((reviewRow as any)?.avg_rating  ?? '0') || 0) * 10) / 10;
+  const review_count = parseInt((reviewRow as any)?.review_count ?? '0', 10);
+
+  return ok({
+    total_appointments_90d:   totalAppointments,
+    completed_appointments:   completedAppointments,
+    cancelled_appointments:   cancelledAppointments,
+    completion_rate:          Number(doctor.completion_rate  ?? 0),
+    cancellation_rate:        Number(doctor.cancellation_rate ?? 0),
+    on_time_rate:             Number(doctor.on_time_rate     ?? 0),
+    avg_consultation_minutes: Number(doctor.avg_consultation_minutes ?? 0),
+    reliability_score:        Number(doctor.reliability_score ?? 0),
+    avg_rating,
+    review_count,
+  });
+}
+
+// ── Revenue time-series (for chart) ──────────────────────────────────────────
+export async function getRevenueTimeSeries(
+  period: 'today' | 'week' | 'month',
+): Promise<ServiceResponse<object[]>> {
+  const now = new Date();
+  let periodStart: Date;
+  let groupExpr: string;
+  let labelFormat: string;
+
+  if (period === 'today') {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    groupExpr   = "date_trunc('hour', captured_at)";
+    labelFormat = 'HH24":00"';
+  } else if (period === 'week') {
+    periodStart = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
+    groupExpr   = "date_trunc('day', captured_at)";
+    labelFormat = 'Dy';
+  } else {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    groupExpr   = "date_trunc('day', captured_at)";
+    labelFormat = 'DD Mon';
+  }
+
+  const rows = await sequelize.query<{
+    label: string; gmv: string; revenue: string; transactions: string;
+  }>(
+    `SELECT
+       to_char(${groupExpr}, :labelFormat) AS label,
+       COALESCE(SUM(amount::numeric),       0) AS gmv,
+       COALESCE(SUM(platform_fee::numeric), 0) AS revenue,
+       COUNT(*)                                AS transactions
+     FROM payments
+     WHERE status = 'captured' AND captured_at >= :periodStart
+     GROUP BY ${groupExpr}
+     ORDER BY ${groupExpr}`,
+    { replacements: { periodStart, labelFormat }, type: QueryTypes.SELECT },
+  );
+
+  return ok(
+    rows.map(r => ({
+      label:        r.label.trim(),
+      gmv:          parseFloat(r.gmv),
+      revenue:      parseFloat(r.revenue),
+      transactions: parseInt(r.transactions, 10),
+    })),
+  );
 }
 
 // ── Increment Redis live counters ─────────────────────────────────────────────

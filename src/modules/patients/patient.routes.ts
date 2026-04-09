@@ -1,9 +1,11 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import * as PatientController from './patient.controller';
 import * as PatientService    from './patient.service';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { requireCompleteProfile } from '../../middlewares/profileGuard.middleware';
+import { uploadHealthRecordFile } from '../../middlewares/upload.middleware';
 import {
   CompleteProfileSchema,
   UpdateProfileSchema,
@@ -12,6 +14,7 @@ import { asyncHandler } from '../../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload } from '../../types';
 import { RecordType, Appointment, DoctorReview } from '../../models';
+import { env } from '../../config/env';
 import { z } from 'zod';
 
 const router = Router();
@@ -77,23 +80,67 @@ router.get(
   '/me/records',
   asyncHandler(async (req: Request, res: Response) => {
     const user    = req.user as JwtAccessPayload;
-    const page    = parseInt(String((req.query as Record<string,string>).page    ?? '1'),  10);
-    const perPage = parseInt(String((req.query as Record<string,string>).per_page ?? '20'), 10);
-    const result  = await PatientService.getHealthRecords(user.sub, page, perPage);
+    const page       = parseInt(String((req.query as Record<string,string>).page     ?? '1'),  10);
+    const perPage    = parseInt(String((req.query as Record<string,string>).per_page ?? '20'), 10);
+    const recordType = String((req.query as Record<string,string>).type ?? '').trim() || undefined;
+    const result  = await PatientService.getHealthRecords(user.sub, page, perPage, recordType);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     const d = result.data as { rows: object[]; count: number };
     sendSuccess(res, d.rows, 200, { total: d.count, page, per_page: perPage, total_pages: Math.ceil(d.count / perPage) });
   }),
 );
 
+// POST /me/records — accepts either multipart/form-data (with file) or JSON (with file_url)
 router.post(
   '/me/records',
-  validate(CreateRecordSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const user   = req.user as JwtAccessPayload;
-    const result = await PatientService.createHealthRecord(user.sub, req.body);
-    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
-    sendCreated(res, result.data);
+    const user = req.user as JwtAccessPayload;
+    const contentType = req.headers['content-type'] ?? '';
+
+    if (contentType.includes('multipart/form-data')) {
+      // Handle actual file upload
+      await new Promise<void>((resolve, reject) =>
+        uploadHealthRecordFile(req, res, (err) => (err ? reject(err) : resolve())),
+      );
+
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) { sendError(res, 400, { code: 'FILE_REQUIRED', message: 'No file uploaded.' }); return; }
+
+      const body   = req.body as Record<string, string>;
+      const name   = (body.name ?? body.title ?? '').trim();
+      const rtype  = body.record_type as RecordType;
+
+      if (!name)  { sendError(res, 400, { code: 'TITLE_REQUIRED', message: 'Record name is required.' }); return; }
+      if (!rtype || !Object.values(RecordType).includes(rtype)) {
+        sendError(res, 400, { code: 'INVALID_RECORD_TYPE', message: 'Invalid record_type.' }); return;
+      }
+
+      const baseUrl  = `${req.protocol}://${req.get('host')}`;
+      const fileUrl  = `${baseUrl}/uploads/health-records/${file.filename}`;
+
+      const result = await PatientService.createHealthRecord(user.sub, {
+        title:       name,
+        record_type: rtype,
+        file_url:    fileUrl,
+        file_name:   file.originalname,
+        file_size:   file.size,
+        mime_type:   file.mimetype,
+        notes:       body.notes ?? null,
+        record_date: body.record_date ?? undefined,
+      });
+      if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+      sendCreated(res, result.data);
+    } else {
+      // JSON path — expects file_url already provided (e.g. from S3)
+      const parseResult = CreateRecordSchema.safeParse({ body: req.body });
+      if (!parseResult.success) {
+        sendError(res, 400, { code: 'VALIDATION_ERROR', message: parseResult.error.errors[0]?.message ?? 'Validation failed.' });
+        return;
+      }
+      const result = await PatientService.createHealthRecord(user.sub, req.body);
+      if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+      sendCreated(res, result.data);
+    }
   }),
 );
 

@@ -82,6 +82,18 @@ router.get('/financial',
   }),
 );
 
+// Revenue time-series for chart
+router.get('/financial/chart',
+  requirePermission(Permission.FINANCIALS_READ),
+  validate(PeriodSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const period = qs(req, 'period', 'week') as 'today' | 'week' | 'month';
+    const result = await AdminService.getRevenueTimeSeries(period);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
 // Doctor list — scoped for HOSPITAL_ADMIN
 router.get('/doctors',
   requirePermission(Permission.DOCTORS_READ),
@@ -120,6 +132,18 @@ router.get('/appointments',
   }),
 );
 
+// Send push/SMS reminder for a specific appointment
+router.post('/appointments/:id/reminder',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  validate(UuidParamSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+    const result = await AdminService.sendAppointmentReminder(param(req, 'id'), user.sub);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
 // Hospital admin — view their own hospital detail + staff
 router.get('/my-hospital',
   requirePermission(Permission.HOSPITALS_READ),
@@ -147,6 +171,33 @@ router.get('/my-hospital/staff',
 // ══════════════════════════════════════════════════════════════════════════════
 //  SUPER_ADMIN only below this line
 // ══════════════════════════════════════════════════════════════════════════════
+
+// Per-doctor analytics
+router.get('/doctors/:id/stats',
+  requirePermission(Permission.DOCTORS_READ),
+  validate(UuidParamSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await AdminService.getDoctorStats(param(req, 'id'));
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+// Switch primary hospital for a multi-affiliated doctor
+router.put('/doctors/:id/primary-hospital',
+  requirePermission(Permission.DOCTORS_MANAGE),
+  validate(z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body:   z.object({ hospital_id: z.string().uuid() }),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+    const { hospital_id } = req.body as { hospital_id: string };
+    const result = await AdminService.setPrimaryHospital(param(req, 'id'), hospital_id, user.sub);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
 
 // Doctor management
 router.patch('/doctors/:id/status',
