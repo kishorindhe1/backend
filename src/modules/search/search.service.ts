@@ -183,6 +183,7 @@ async function mapSymptomsToSpecialisations(query: string): Promise<string[]> {
       ],
     },
     order: [['priority', 'DESC']],
+    limit: 20,
   });
 
   const specialisations = new Set<string>();

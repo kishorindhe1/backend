@@ -9,6 +9,7 @@ import {
   CancelAppointmentSchema,
   AppointmentIdSchema,
   RejectAppointmentSchema,
+  RescheduleAppointmentSchema,
 } from './appointment.validation';
 import { asyncHandler } from '../../utils/asyncHandler';
 import { UserRole }     from '../../types';
@@ -30,7 +31,7 @@ router.post(
 router.get('/my',        asyncHandler(AppointmentController.getMyAppointments));
 router.get('/:id',       validate(AppointmentIdSchema),     asyncHandler(AppointmentController.getAppointment));
 router.delete('/:id',    validate(CancelAppointmentSchema), asyncHandler(AppointmentController.cancelAppointment));
-router.put('/:id/reschedule', asyncHandler(AppointmentController.rescheduleAppointment));
+router.put('/:id/reschedule', validate(RescheduleAppointmentSchema), asyncHandler(AppointmentController.rescheduleAppointment));
 
 // Hospital admin routes — accept / reject patient bookings
 router.get('/hospital/pending',

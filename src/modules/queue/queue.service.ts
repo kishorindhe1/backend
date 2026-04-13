@@ -140,6 +140,7 @@ export async function getDoctorDayQueue(
       }],
     }],
     order: [['queue_position', 'ASC']],
+    limit: 200, // a single OPD session will never exceed this
   });
   return ok(entries);
 }

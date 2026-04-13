@@ -24,3 +24,11 @@ export const RejectAppointmentSchema = z.object({
   params: z.object({ id: z.string().uuid('Invalid appointment ID') }),
   body:   z.object({ reason: z.string().max(300).optional() }),
 });
+
+export const RescheduleAppointmentSchema = z.object({
+  params: z.object({ id: z.string().uuid('Invalid appointment ID') }),
+  body:   z.object({
+    slot_id: z.string().uuid('Invalid slot ID'),
+    reason:  z.string().max(300).optional(),
+  }),
+});
