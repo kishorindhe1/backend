@@ -146,7 +146,7 @@ router.put('/appointments/:id/reschedule',
     const { slot_id, reason } = req.body as { slot_id: string; reason?: string };
     const result = await AdminService.rescheduleAppointmentAsAdmin(
       param(req, 'id'),
-      scopedHospitalId(req),
+      scopedHospitalId(req) ?? null,
       slot_id,
       reason,
     );

@@ -11,6 +11,7 @@ import {
   Appointment, AppointmentStatus, PaymentStatus,
   Payment, PaymentGatewayStatus,
   ConsultationQueue, QueueStatus,
+  GeneratedSlot, SlotStatus,
   DoctorDelayEvent, DelayStatus,
   NotificationLog, NotificationStatus,
   AdminAuditLog, AdminAction,
