@@ -132,6 +132,29 @@ router.get('/appointments',
   }),
 );
 
+// Reschedule an appointment (with hospital scope check)
+router.put('/appointments/:id/reschedule',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  validate(z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body:   z.object({
+      slot_id: z.string().uuid('Invalid slot ID'),
+      reason:  z.string().max(300).optional(),
+    }),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { slot_id, reason } = req.body as { slot_id: string; reason?: string };
+    const result = await AdminService.rescheduleAppointmentAsAdmin(
+      param(req, 'id'),
+      scopedHospitalId(req),
+      slot_id,
+      reason,
+    );
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
 // Send push/SMS reminder for a specific appointment
 router.post('/appointments/:id/reminder',
   requirePermission(Permission.APPOINTMENTS_READ),

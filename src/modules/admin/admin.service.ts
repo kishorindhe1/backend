@@ -440,6 +440,71 @@ export async function updatePatientStatus(
   return ok({ message: `Patient ${action}d successfully.`, account_status: newStatus });
 }
 
+// ── Admin reschedule appointment (bypasses patient ownership check) ───────────
+export async function rescheduleAppointmentAsAdmin(
+  appointmentId: string,
+  adminHospitalId: string | null,   // null = super_admin (no scope restriction)
+  newSlotId: string,
+  reason?: string,
+): Promise<ServiceResponse<object>> {
+  const appointment = await Appointment.findByPk(appointmentId);
+  if (!appointment) return fail('BOOKING_NOT_FOUND', 'Appointment not found.', 404);
+
+  // Hospital admins can only reschedule within their hospital
+  if (adminHospitalId && appointment.hospital_id !== adminHospitalId) {
+    return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'This appointment does not belong to your hospital.', 403);
+  }
+
+  if ([AppointmentStatus.CANCELLED, AppointmentStatus.COMPLETED, AppointmentStatus.IN_PROGRESS].includes(appointment.status)) {
+    return fail('BOOKING_CANNOT_RESCHEDULE', 'This appointment cannot be rescheduled.', 422);
+  }
+
+  const lockKey = `lock:slot:${newSlotId}`;
+  const lockVal = `admin-${Date.now()}`;
+  const acquired = await redis.set(lockKey, lockVal, 'EX', 30, 'NX');
+  if (!acquired) return fail('SLOT_UNAVAILABLE', 'Slot is being booked. Please try another.', 409);
+
+  try {
+    const result = await sequelize.transaction(async (t) => {
+      const newSlot = await GeneratedSlot.findOne({
+        where: { id: newSlotId, doctor_id: appointment.doctor_id, hospital_id: appointment.hospital_id },
+        lock: t.LOCK.UPDATE, transaction: t,
+      });
+      if (!newSlot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'New slot not found.');
+      if (newSlot.status !== SlotStatus.AVAILABLE) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'Slot already booked.');
+      if (newSlot.slot_datetime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
+
+      if (appointment.slot_id) {
+        await GeneratedSlot.update(
+          { status: SlotStatus.AVAILABLE, appointment_id: null },
+          { where: { id: appointment.slot_id }, transaction: t },
+        );
+      }
+
+      await newSlot.update({ status: SlotStatus.BOOKED, appointment_id: appointment.id }, { transaction: t });
+      await appointment.update({
+        slot_id: newSlotId,
+        scheduled_at: newSlot.slot_datetime,
+        status: AppointmentStatus.RESCHEDULED,
+        cancellation_reason: reason ?? null,
+      }, { transaction: t });
+
+      return appointment;
+    });
+
+    const oldDate = appointment.scheduled_at.toISOString().split('T')[0];
+    const newDate = result.scheduled_at.toISOString().split('T')[0];
+    await redis.del(`slots:${appointment.doctor_id}:${oldDate}`);
+    if (oldDate !== newDate) await redis.del(`slots:${appointment.doctor_id}:${newDate}`);
+
+    logger.info('Admin rescheduled appointment', { appointmentId, newSlotId });
+    return ok({ appointment_id: result.id, status: result.status, scheduled_at: result.scheduled_at });
+  } finally {
+    const cur = await redis.get(lockKey);
+    if (cur === lockVal) await redis.del(lockKey);
+  }
+}
+
 // ── List appointments (scoped) ────────────────────────────────────────────────
 export async function listAppointments(filters: {
   hospital_id?: string;   // injected for HOSPITAL_ADMIN

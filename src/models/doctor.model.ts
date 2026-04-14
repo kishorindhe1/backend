@@ -73,12 +73,8 @@ DoctorProfile.init(
     profile_photo_url: {
       type: DataTypes.STRING(500),
       allowNull: true,
-      get() {
-        const stored = this.getDataValue('profile_photo_url');
-        if (stored) return stored;
-        const name = this.getDataValue('full_name') ?? 'Doctor';
-        return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=4F46E5&color=fff&size=200&bold=true&rounded=true`;
-      },
+      // Return null when no photo — clients render initials-based avatars offline.
+      // Previously fell back to ui-avatars.com which fails when offline.
     },
     bio:               { type: DataTypes.TEXT, allowNull: true },
 

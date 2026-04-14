@@ -155,12 +155,99 @@ export async function rebuildDoctorIndex(doctorId: string, hospitalId: string): 
 
 // ── Rebuild entire index ──────────────────────────────────────────────────────
 export async function rebuildFullIndex(): Promise<{ updated: number; errors: number }> {
-  const affiliations = await DoctorHospitalAffiliation.findAll({ where: { is_active: true } });
+  // Batch-load all active affiliations with their doctor + hospital in one query
+  // to avoid N×2 extra round-trips inside the loop.
+  const affiliations = await DoctorHospitalAffiliation.findAll({
+    where: { is_active: true },
+    include: [
+      { model: DoctorProfile, as: 'doctor' },
+      { model: Hospital,      as: 'hospital' },
+    ],
+  });
+
+  const today      = new Date().toISOString().split('T')[0];
+  const todayStart = new Date(`${today}T00:00:00.000Z`);
+  const todayEnd   = new Date(`${today}T23:59:59.999Z`);
   let updated = 0, errors = 0;
 
   for (const aff of affiliations) {
+    const doctor   = (aff as unknown as { doctor: DoctorProfile }).doctor;
+    const hospital = (aff as unknown as { hospital: Hospital }).hospital;
+    if (!doctor || !hospital) continue;
+
     try {
-      await rebuildDoctorIndex(aff.doctor_id, aff.hospital_id);
+      const [slotsToday, nextSlot] = await Promise.all([
+        GeneratedSlot.count({
+          where: {
+            doctor_id: aff.doctor_id, hospital_id: aff.hospital_id,
+            status: SlotStatus.AVAILABLE,
+            slot_datetime: { [Op.between]: [todayStart, todayEnd] },
+          },
+        }),
+        GeneratedSlot.findOne({
+          where: {
+            doctor_id: aff.doctor_id, hospital_id: aff.hospital_id,
+            status: SlotStatus.AVAILABLE,
+            slot_datetime: { [Op.gt]: new Date() },
+          },
+          order: [['slot_datetime', 'ASC']],
+        }),
+      ]);
+
+      const normalized = doctor.full_name.toLowerCase().replace(/^dr\.?\s*/i, '').trim();
+      const wilson     = wilsonScore(Number(doctor.reliability_score), 0);
+
+      const [entry, created] = await DoctorSearchIndex.findOrCreate({
+        where: { doctor_id: aff.doctor_id, hospital_id: aff.hospital_id },
+        defaults: {
+          doctor_id: aff.doctor_id, hospital_id: aff.hospital_id,
+          doctor_name:            doctor.full_name,
+          doctor_name_normalized: normalized,
+          specialization:         doctor.specialization,
+          qualifications:         doctor.qualifications,
+          languages_spoken:       doctor.languages_spoken,
+          gender:                 doctor.gender,
+          experience_years:       doctor.experience_years,
+          hospital_name:          hospital.name,
+          city:                   hospital.city,
+          area:                   hospital.address_line1,
+          latitude:               hospital.latitude ? Number(hospital.latitude) : null,
+          longitude:              hospital.longitude ? Number(hospital.longitude) : null,
+          consultation_fee:       Number(aff.consultation_fee),
+          next_available_slot:    nextSlot?.slot_datetime ?? null,
+          available_today:        slotsToday > 0,
+          available_slots_today:  slotsToday,
+          avg_rating:             0,
+          total_reviews:          0,
+          wilson_rating_score:    wilson,
+          reliability_score:      Number(doctor.reliability_score),
+          total_consultations:    0,
+          is_active:              doctor.is_active && !doctor.deleted_at,
+          is_verified:            doctor.verification_status === VerificationStatus.APPROVED,
+          hospital_is_live:       hospital.onboarding_status === OnboardingStatus.LIVE,
+          last_indexed_at:        new Date(),
+        },
+      });
+
+      if (!created) {
+        await entry.update({
+          doctor_name:            doctor.full_name,
+          doctor_name_normalized: normalized,
+          specialization:         doctor.specialization,
+          consultation_fee:       Number(aff.consultation_fee),
+          next_available_slot:    nextSlot?.slot_datetime ?? null,
+          available_today:        slotsToday > 0,
+          available_slots_today:  slotsToday,
+          wilson_rating_score:    wilson,
+          reliability_score:      Number(doctor.reliability_score),
+          is_active:              doctor.is_active && !doctor.deleted_at,
+          is_verified:            doctor.verification_status === VerificationStatus.APPROVED,
+          hospital_is_live:       hospital.onboarding_status === OnboardingStatus.LIVE,
+          last_indexed_at:        new Date(),
+        });
+      }
+
+      await redis.del(`search:doctor:${aff.doctor_id}:${aff.hospital_id}`);
       updated++;
     } catch (err) {
       errors++;
@@ -380,7 +467,7 @@ export async function searchDoctors(filters: SearchFilters): Promise<ServiceResp
       doctor_id:        entry.doctor_id,
       hospital_id:      entry.hospital_id,
       name:             entry.doctor_name,
-      profile_photo_url: `https://ui-avatars.com/api/?name=${encodeURIComponent(entry.doctor_name)}&background=4F46E5&color=fff&size=200&bold=true&rounded=true`,
+      profile_photo_url: null, // No photo stored — app renders initials-based avatar
       specialization:   entry.specialization,
       qualifications:   entry.qualifications,
       experience_years: entry.experience_years,
