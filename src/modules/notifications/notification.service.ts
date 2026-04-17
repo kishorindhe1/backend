@@ -94,6 +94,9 @@ async function processJob(job: Job<NotificationJobPayload>): Promise<void> {
   }
 
   for (const channel of channels) {
+    // SMS is restricted to OTP only — all other types use push/email
+    if (channel === NotificationChannel.SMS && type !== 'otp') continue;
+
     // Check user channel preference
     if (pref) {
       if (channel === NotificationChannel.SMS   && !pref.sms_enabled)   continue;

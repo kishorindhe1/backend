@@ -1,15 +1,13 @@
 import * as admin  from 'firebase-admin';
 import * as fs      from 'fs';
 import * as path    from 'path';
-import { SNSClient, PublishCommand }         from '@aws-sdk/client-sns';
 import { SESClient, SendEmailCommand }       from '@aws-sdk/client-ses';
 import { env }    from '../config/env';
 import { redis }   from '../config/redis';
 import { logger }  from './logger';
 
-// ── AWS clients (lazy, singleton) ─────────────────────────────────────────────
+// ── AWS SES client (lazy, singleton) ──────────────────────────────────────────
 
-let snsClient: SNSClient | null = null;
 let sesClient: SESClient | null = null;
 
 function getAwsCredentials() {
@@ -23,11 +21,6 @@ function getAwsCredentials() {
       secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
     },
   };
-}
-
-function getSnsClient(): SNSClient {
-  if (!snsClient) snsClient = new SNSClient(getAwsCredentials());
-  return snsClient;
 }
 
 function getSesClient(): SESClient {
@@ -82,118 +75,54 @@ async function recordSuccess(provider: string): Promise<void> {
   await redis.del(CB_KEY(provider));
 }
 
-// ── AWS SNS — SMS ─────────────────────────────────────────────────────────────
-
-async function sendViaSNS(mobile: string, message: string): Promise<string> {
-  const sns = getSnsClient();
-  const res = await sns.send(new PublishCommand({
-    PhoneNumber: `+91${mobile}`,
-    Message:     message,
-    MessageAttributes: {
-      'AWS.SNS.SMS.SenderID': {
-        DataType:    'String',
-        StringValue: env.AWS_SNS_SENDER_ID,   // set AWS_SNS_SENDER_ID=UPCHARY (DLT registered)
-      },
-      'AWS.SNS.SMS.SMSType': {
-        DataType:    'String',
-        StringValue: 'Transactional',   // ensures delivery even during DND
-      },
-    },
-  }));
-  if (!res.MessageId) throw new Error('SNS returned no MessageId');
-  return res.MessageId;
-}
-
 // ── MSG91 ─────────────────────────────────────────────────────────────────────
 
-async function sendViaMSG91(mobile: string, message: string): Promise<string> {
-  if (!env.MSG91_AUTH_KEY) throw new Error('MSG91_AUTH_KEY not configured');
-  const res = await fetchWithTimeout('https://api.msg91.com/api/v5/otp', {
+async function sendViaMSG91(mobile: string, otp: string): Promise<string> {
+  if (!env.MSG91_AUTH_KEY)     throw new Error('MSG91_AUTH_KEY not configured');
+  if (!env.MSG91_TEMPLATE_ID)  throw new Error('MSG91_TEMPLATE_ID not configured');
+
+  const payload = {
+    template_id: env.MSG91_TEMPLATE_ID,
+    sender:      env.MSG91_SENDER_ID,
+    mobiles:     `91${mobile}`,
+    OTP:         otp,             // matches ##OTP## variable in the DLT template
+  };
+  logger.debug('MSG91 request', { mobile: `91${mobile}`, template_id: env.MSG91_TEMPLATE_ID });
+
+  const res = await fetchWithTimeout('https://control.msg91.com/api/v5/flow/', {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({
-      template_id: env.MSG91_TEMPLATE_ID,
-      mobile:      `91${mobile}`,
-      authkey:     env.MSG91_AUTH_KEY,
-      message,
-    }),
-  }, 3000);
-  if (!res.ok) throw new Error(`MSG91 HTTP ${res.status}`);
-  const data = await res.json() as { type: string; request_id?: string };
-  if (data.type !== 'success') throw new Error(`MSG91: ${JSON.stringify(data)}`);
-  return data.request_id ?? `msg91_${Date.now()}`;
-}
-
-// ── Twilio ────────────────────────────────────────────────────────────────────
-
-async function sendViaTwilio(mobile: string, message: string): Promise<string> {
-  const sid  = process.env.TWILIO_ACCOUNT_SID;
-  const auth = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_PHONE_NUMBER;
-  if (!sid || !auth || !from) throw new Error('Twilio credentials not configured');
-  const res = await fetchWithTimeout(
-    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
-    {
-      method:  'POST',
-      headers: {
-        Authorization:  `Basic ${Buffer.from(`${sid}:${auth}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ To: `+91${mobile}`, From: from, Body: message }).toString(),
+    headers: {
+      'Content-Type': 'application/JSON',
+      'authkey':      env.MSG91_AUTH_KEY,
     },
-    4000,
-  );
-  if (!res.ok) throw new Error(`Twilio HTTP ${res.status}`);
-  const data = await res.json() as { sid?: string };
-  if (!data.sid) throw new Error(`Twilio no SID: ${JSON.stringify(data)}`);
-  return data.sid;
+    body: JSON.stringify(payload),
+  }, 3000);
+
+  const data = await res.json() as { type?: string; message?: string; request_id?: string };
+  logger.debug('MSG91 response', { status: res.status, data });
+
+  if (!res.ok || (data.type && data.type !== 'success')) {
+    throw new Error(`MSG91: ${JSON.stringify(data)}`);
+  }
+  return data.request_id ?? data.message ?? `msg91_${Date.now()}`;
 }
 
-// ── sendSMS — SNS primary, MSG91 + Twilio fallback ────────────────────────────
+// ── sendSMS — MSG91 only (OTP permission only) ────────────────────────────────
 
-export async function sendSMS(mobile: string, message: string): Promise<{ provider: string; msgId: string }> {
-  if (env.NODE_ENV === 'development') {
-    logger.debug(`📱  [SMS → ${mobile}]: ${message}`);
-    return { provider: 'console', msgId: `dev_${Date.now()}` };
+export async function sendSMS(mobile: string, otp: string): Promise<{ provider: string; msgId: string }> {
+  if (await isCircuitOpen('msg91')) {
+    throw new Error('MSG91 circuit breaker is open');
   }
 
-  // 1. AWS SNS
-  if (env.AWS_ACCESS_KEY_ID && !(await isCircuitOpen('sns'))) {
-    try {
-      const msgId = await sendViaSNS(mobile, message);
-      await recordSuccess('sns');
-      return { provider: 'sns', msgId };
-    } catch (err) {
-      await recordFailure('sns');
-      logger.warn('SNS SMS failed, trying MSG91', { error: String(err) });
-    }
+  try {
+    const msgId = await sendViaMSG91(mobile, otp);
+    await recordSuccess('msg91');
+    return { provider: 'msg91', msgId };
+  } catch (err) {
+    await recordFailure('msg91');
+    logger.error('MSG91 OTP SMS failed', { error: String(err) });
+    throw err;
   }
-
-  // 2. MSG91
-  if (!(await isCircuitOpen('msg91'))) {
-    try {
-      const msgId = await sendViaMSG91(mobile, message);
-      await recordSuccess('msg91');
-      return { provider: 'msg91', msgId };
-    } catch (err) {
-      await recordFailure('msg91');
-      logger.warn('MSG91 failed, trying Twilio', { error: String(err) });
-    }
-  }
-
-  // 3. Twilio
-  if (!(await isCircuitOpen('twilio'))) {
-    try {
-      const msgId = await sendViaTwilio(mobile, message);
-      await recordSuccess('twilio');
-      return { provider: 'twilio', msgId };
-    } catch (err) {
-      await recordFailure('twilio');
-      logger.error('All SMS providers failed', { error: String(err) });
-    }
-  }
-
-  throw new Error('All SMS providers unavailable');
 }
 
 // ── AWS SES — Email ───────────────────────────────────────────────────────────

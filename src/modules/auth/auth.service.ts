@@ -124,7 +124,7 @@ export async function logout(jti: string, exp: number, userId: string): Promise<
 }
 
 async function sendOtpSms(mobile: string, otp: string): Promise<void> {
-  const message = `Your Upcharify OTP is ${otp}. Valid for ${env.OTP_EXPIRY_MINUTES} minutes. Do not share with anyone.`;
-  const result  = await sendSMS(mobile, message);
+  // MSG91 OTP API substitutes ##OTP## in the DLT-registered template automatically
+  const result = await sendSMS(mobile, otp);
   logger.info('OTP SMS sent', { mobile: maskMobile(mobile), provider: result.provider });
 }
