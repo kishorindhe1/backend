@@ -81,6 +81,9 @@ const envSchema = z.object({
   // GST / Invoice
   COMPANY_GSTIN:         z.string().optional(),  // e.g. 27AABCU9603R1ZX
   COMPANY_ADDRESS:       z.string().optional(),  // shown on invoice footer
+
+  // Teleconsult
+  TELECONSULT_BASE_URL:  z.string().default('https://consult.upcharify.com'),
 });
 
 const parsed = envSchema.safeParse(process.env);

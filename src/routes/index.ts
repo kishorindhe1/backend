@@ -16,6 +16,11 @@ import searchRoutes        from '../modules/search/search.routes';
 import adminRoutes         from '../modules/admin/admin.routes';
 import adminAuthRoutes     from '../modules/admin-auth/admin-auth.routes';
 import reviewRoutes        from '../modules/reviews/review.routes';
+import governanceRoutes    from '../modules/governance/governance.routes';
+import gapBookingRoutes   from '../modules/gap-booking/gap-booking.routes';
+import waitlistRoutes     from '../modules/waitlist/waitlist.routes';
+import doctorAppRoutes     from '../modules/doctor-app/doctor-app.routes';
+// import teleconsultRoutes   from '../modules/teleconsult/teleconsult.routes'; // deferred
 
 const router = Router();
 
@@ -77,5 +82,20 @@ router.use('/admin',         adminRoutes);
 
 // ── Phase 5 ───────────────────────────────────────────────────────────────────
 router.use('/reviews',       reviewRoutes);
+
+// ── Phase 2 — Slot Governance ─────────────────────────────────────────────────
+router.use('/governance',    governanceRoutes);
+
+// ── Phase 6 — Gap-based booking ───────────────────────────────────────────────
+router.use('/procedures',    gapBookingRoutes);
+
+// ── Phase 7 — Waitlist ────────────────────────────────────────────────────────
+router.use('/waitlist',      waitlistRoutes);
+
+// ── Phase 9 — Doctor app ──────────────────────────────────────────────────────
+router.use('/doctor-app',    doctorAppRoutes);
+
+// Phase 10 — Teleconsult: deferred, not in current plan
+// router.use('/teleconsult',   teleconsultRoutes);
 
 export default router;

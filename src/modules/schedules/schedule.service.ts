@@ -1,10 +1,10 @@
 import { Op } from 'sequelize';
-import { Schedule, DayOfWeek }   from '../../models';
-import { GeneratedSlot, SlotStatus } from '../../models';
-import { DoctorProfile }         from '../../models';
+import { Schedule, DayOfWeek }        from '../../models';
+import { GeneratedSlot, SlotStatus }  from '../../models';
+import { OpdSlotSession, OpdSlotStatus } from '../../models';
 import { redis, RedisKeys, RedisTTL } from '../../config/redis';
 import { ServiceResponse, ok, fail }  from '../../types';
-import { logger }                from '../../utils/logger';
+import { logger }                     from '../../utils/logger';
 
 // ── Day-of-week helpers ───────────────────────────────────────────────────────
 const JS_DAY_TO_ENUM: DayOfWeek[] = [
@@ -119,6 +119,9 @@ export async function generateSlotsForDoctor(
 }
 
 // ── Get available slots for a doctor on a given date ─────────────────────────
+// Phase 3: reads from OpdSlotSession (PUBLISHED) as primary source when available.
+// Cross-references GeneratedSlot by time to return a compatible slot_id for booking.
+// Falls back to GeneratedSlot when no governance-published slots exist.
 export async function getAvailableSlots(
   doctorId: string,
   hospitalId: string,
@@ -127,6 +130,71 @@ export async function getAvailableSlots(
   const cacheKey = RedisKeys.availableSlots(doctorId, date);
   const cached   = await redis.get(cacheKey);
   if (cached) return ok(JSON.parse(cached));
+
+  // ── Primary: governance-published slots ────────────────────────────────────
+  const publishedSessions = await OpdSlotSession.findAll({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, date, status: OpdSlotStatus.PUBLISHED },
+    order: [['slot_start_time', 'ASC']],
+  });
+
+  if (publishedSessions.length > 0) {
+    // Cross-reference with GeneratedSlot (match by time HH:MM) for booking compat
+    const dayStart = new Date(`${date}T00:00:00.000Z`);
+    const dayEnd   = new Date(`${date}T23:59:59.999Z`);
+
+    const generatedSlots = await GeneratedSlot.findAll({
+      where: {
+        doctor_id:     doctorId,
+        hospital_id:   hospitalId,
+        status:        SlotStatus.AVAILABLE,
+        slot_datetime: { [Op.between]: [dayStart, dayEnd] },
+      },
+    });
+
+    // Build time→GeneratedSlot.id map (HH:MM → id)
+    const genByTime = new Map<string, string>();
+    for (const gs of generatedSlots) {
+      const hhmm = `${String(gs.slot_datetime.getUTCHours()).padStart(2, '0')}:${String(gs.slot_datetime.getUTCMinutes()).padStart(2, '0')}`;
+      genByTime.set(hhmm, gs.id);
+    }
+
+    const result = publishedSessions.map((s) => {
+      const generatedSlotId = genByTime.get(s.slot_start_time);
+      if (!generatedSlotId) {
+        logger.warn('Phase3: published OpdSlotSession has no matching GeneratedSlot', {
+          doctorId, hospitalId, date, slot_start_time: s.slot_start_time,
+        });
+      }
+      return {
+        slot_id:          generatedSlotId ?? s.id,  // fallback to OpdSlotSession.id if no match
+        opd_slot_id:      s.id,
+        date:             s.date,
+        slot_start_time:  s.slot_start_time,
+        slot_end_time:    s.slot_end_time,
+        duration_minutes: s.duration_minutes,
+        slot_category:    s.slot_category,
+        status:           s.status,
+        source:           generatedSlotId ? 'governance' : 'governance_only',
+      };
+    });
+
+    // Validate coverage — log GeneratedSlots missing from OpdSlotSession
+    const publishedTimes = new Set(publishedSessions.map((s) => s.slot_start_time));
+    for (const gs of generatedSlots) {
+      const hhmm = `${String(gs.slot_datetime.getUTCHours()).padStart(2, '0')}:${String(gs.slot_datetime.getUTCMinutes()).padStart(2, '0')}`;
+      if (!publishedTimes.has(hhmm)) {
+        logger.warn('Phase3: GeneratedSlot not in published OpdSlotSession (discrepancy)', {
+          doctorId, hospitalId, date, hhmm, generatedSlotId: gs.id,
+        });
+      }
+    }
+
+    await redis.setex(cacheKey, RedisTTL.AVAILABLE_SLOTS, JSON.stringify(result));
+    return ok(result);
+  }
+
+  // ── Fallback: legacy GeneratedSlot path ────────────────────────────────────
+  logger.info('Phase3: no published governance slots — falling back to GeneratedSlot', { doctorId, hospitalId, date });
 
   const dayStart = new Date(`${date}T00:00:00.000Z`);
   const dayEnd   = new Date(`${date}T23:59:59.999Z`);
@@ -143,9 +211,11 @@ export async function getAvailableSlots(
 
   const result = slots.map((s) => ({
     slot_id:          s.id,
+    opd_slot_id:      null,
     slot_datetime:    s.slot_datetime,
     duration_minutes: s.duration_minutes,
     status:           s.status,
+    source:           'legacy',
   }));
 
   await redis.setex(cacheKey, RedisTTL.AVAILABLE_SLOTS, JSON.stringify(result));

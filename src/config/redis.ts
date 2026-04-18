@@ -40,6 +40,10 @@ export const RedisKeys = {
   availableSlots:  (doctorId: string, date: string)         => `slots:available:${doctorId}:${date}`,
   doctorSchedule:  (doctorId: string)                       => `schedule:doctor:${doctorId}`,
   hospitalDoctors: (hospitalId: string)                     => `hospital:doctors:${hospitalId}`,
+
+  // Phase 2 — Slot Governance
+  publishedSlots:  (doctorId: string, date: string)         => `slots:published:${doctorId}:${date}`,
+  draftSlots:      (hospitalId: string, date: string)       => `slots:draft:${hospitalId}:${date}`,
 } as const;
 
 // ── TTL constants (seconds) ───────────────────────────────────────────────────
@@ -55,4 +59,7 @@ export const RedisTTL = {
   AVAILABLE_SLOTS:  60,          // 1 minute — slot availability cache
   DOCTOR_SCHEDULE:  5 * 60,      // 5 minutes — schedule cache
   HOSPITAL_DOCTORS: 10 * 60,     // 10 minutes — hospital doctor list cache
+
+  // Phase 2 — Slot Governance
+  PUBLISHED_SLOTS:  2 * 60,      // 2 minutes — published slot availability (changes fast)
 } as const;

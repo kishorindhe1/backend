@@ -3,10 +3,13 @@ import { sequelize }                  from '../../config/database';
 import {
   ConsultationQueue, QueueStatus,
   Appointment, AppointmentStatus, PaymentStatus, CancellationBy, PaymentMode, AppointmentType,
+  PriorityTier,
   DoctorDelayEvent, DelayStatus, DelayType,
   DoctorHospitalAffiliation,
   DoctorProfile,
   GeneratedSlot, SlotStatus,
+  OpdSlotSession, OpdSlotStatus,
+  WalkInToken, WalkInTokenStatus,
   User,
 }                                     from '../../models';
 import { NotificationChannel } from '../../models';
@@ -31,7 +34,17 @@ export async function markPatientArrived(
   return ok({ message: 'Patient marked as arrived.', queue_position: entry.queue_position });
 }
 
-// ── Call next patient ─────────────────────────────────────────────────────────
+// Priority tier ordering — lower = higher priority
+const PRIORITY_ORDER: Record<string, number> = {
+  [PriorityTier.EMERGENCY]:         1,
+  [PriorityTier.SENIOR]:            2,
+  [PriorityTier.DIFFERENTLY_ABLED]: 3,
+  [PriorityTier.PREGNANT]:          4,
+  [PriorityTier.FOLLOW_UP]:         5,
+  [PriorityTier.REGULAR]:           6,
+};
+
+// ── Call next patient (priority-aware) ───────────────────────────────────────
 export async function callNextPatient(
   doctorId:   string,
   hospitalId: string,
@@ -44,24 +57,53 @@ export async function callNextPatient(
   });
   if (inProgress) {
     await inProgress.update({ status: QueueStatus.COMPLETED, actual_end_at: new Date() });
-    // Update avg consultation time on doctor profile
     await updateAvgConsultationTime(doctorId, inProgress);
   }
 
-  // Find next waiting patient
-  const next = await ConsultationQueue.findOne({
-    where: { doctor_id: doctorId, queue_date: date, status: { [Op.in]: [QueueStatus.WAITING] } },
+  // Fetch all arrived+waiting patients, then sort by priority tier then position
+  const waiting = await ConsultationQueue.findAll({
+    where: {
+      doctor_id:  doctorId,
+      queue_date: date,
+      status:     QueueStatus.WAITING,
+      arrived_at: { [Op.ne]: null },  // must have arrived
+    },
+    include: [{ model: Appointment, as: 'appointment', attributes: ['priority_tier'] }],
     order: [['queue_position', 'ASC']],
-    include: [{ model: Appointment, as: 'appointment' }],
   });
 
-  if (!next) return ok({ message: 'No more patients in queue.', queue_empty: true });
+  if (!waiting.length) {
+    // No arrived patients — check if there are any waiting (not yet arrived)
+    const any = await ConsultationQueue.count({ where: { doctor_id: doctorId, queue_date: date, status: QueueStatus.WAITING } });
+    return ok({ message: any > 0 ? 'No patients have arrived yet.' : 'No more patients in queue.', queue_empty: any === 0 });
+  }
 
+  // Sort: priority tier first, then queue position
+  waiting.sort((a, b) => {
+    const appt_a = (a as any).appointment;
+    const appt_b = (b as any).appointment;
+    const pa = PRIORITY_ORDER[appt_a?.priority_tier ?? PriorityTier.REGULAR] ?? 6;
+    const pb = PRIORITY_ORDER[appt_b?.priority_tier ?? PriorityTier.REGULAR] ?? 6;
+    if (pa !== pb) return pa - pb;
+    return a.queue_position - b.queue_position;
+  });
+
+  const next = waiting[0];
   await next.update({ status: QueueStatus.CALLED, called_at: new Date() });
   await invalidateQueueCache(doctorId, date);
 
-  logger.info('Next patient called', { doctorId, token: next.queue_position });
-  return ok({ message: `Token ${next.queue_position} called.`, queue_position: next.queue_position, appointment_id: next.appointment_id });
+  const appt = (next as any).appointment;
+  const priorityLabel = appt?.priority_tier && appt.priority_tier !== PriorityTier.REGULAR
+    ? ` [${appt.priority_tier.replace('_', ' ')}]`
+    : '';
+
+  logger.info('Next patient called', { doctorId, token: next.queue_position, priority: appt?.priority_tier });
+  return ok({
+    message:       `Token ${next.queue_position} called.${priorityLabel}`,
+    queue_position: next.queue_position,
+    appointment_id: next.appointment_id,
+    priority_tier:  appt?.priority_tier ?? PriorityTier.REGULAR,
+  });
 }
 
 // ── Start consultation ────────────────────────────────────────────────────────
@@ -299,6 +341,71 @@ export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<ob
 
   logger.info('Walk-in booked', { appointmentId: appointment.id, mobile: patient_mobile, position });
   return ok({ appointment_id: appointment.id, queue_position: position, patient_id: user.id, fee, message: `Walk-in registered. Token #${position}` });
+}
+
+// ── Issue governance walk-in token (linked to OpdSlotSession) ─────────────────
+export interface WalkInTokenInput {
+  doctor_id:    string;
+  hospital_id:  string;
+  patient_id?:  string;    // registered patient user_id (optional)
+  patient_name?: string;   // name for unregistered walk-ins
+  created_by:   string;    // receptionist user_id
+}
+
+export async function issueWalkInToken(input: WalkInTokenInput): Promise<ServiceResponse<{
+  token_id: string;
+  token_number: number;
+  slot_id: string | null;
+  slot_start_time: string | null;
+  message: string;
+}>> {
+  const { doctor_id, hospital_id, patient_id, patient_name, created_by } = input;
+  const date = new Date().toISOString().split('T')[0];
+
+  // Next token number for today
+  const last = await WalkInToken.findOne({
+    where: { doctor_id, hospital_id, date },
+    order: [['token_number', 'DESC']],
+  });
+  const tokenNumber = (last?.token_number ?? 0) + 1;
+
+  // Find an empty published slot (not booked, not blocked)
+  const emptySlot = await OpdSlotSession.findOne({
+    where: { doctor_id, hospital_id, date, status: OpdSlotStatus.PUBLISHED },
+    order: [['slot_start_time', 'ASC']],
+  });
+
+  // Create walk-in token
+  const token = await WalkInToken.create({
+    doctor_id,
+    hospital_id,
+    date,
+    token_number: tokenNumber,
+    patient_id:   patient_id  ?? null,
+    patient_name: patient_name ?? null,
+    status:       WalkInTokenStatus.WAITING,
+    slot_id:      emptySlot?.id ?? null,
+    created_by,
+  });
+
+  // Assign the slot to this walk-in
+  if (emptySlot) {
+    await emptySlot.update({
+      status:           OpdSlotStatus.BOOKED,
+      walk_in_token_id: token.id,
+    });
+  }
+
+  logger.info('Walk-in token issued', { tokenNumber, doctorId: doctor_id, hospitalId: hospital_id, slotId: emptySlot?.id });
+  return ok({
+    token_id:        token.id,
+    token_number:    tokenNumber,
+    slot_id:         emptySlot?.id ?? null,
+    slot_start_time: emptySlot?.slot_start_time ?? null,
+    message:         emptySlot
+      ? `Walk-in token #${tokenNumber} issued. Slot: ${emptySlot.slot_start_time}`
+      : `Walk-in token #${tokenNumber} issued. No empty slot available — patient added to end of queue.`,
+  });
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

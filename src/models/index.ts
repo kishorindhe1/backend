@@ -27,11 +27,18 @@ export {
 }                                      from './doctor.model';
 
 // ── Tier 3 ────────────────────────────────────────────────────────────────────
-export { DoctorHospitalAffiliation }   from './doctor-affiliation.model';
-export { Schedule, DayOfWeek, SessionType } from './schedule.model';
+export { DoctorHospitalAffiliation, EmploymentType, SlotAutonomyLevel } from './doctor-affiliation.model';
+export { Schedule, DayOfWeek, SessionType, ScheduleBookingMode } from './schedule.model';
 
 // ── Tier 4 ────────────────────────────────────────────────────────────────────
 export { GeneratedSlot, SlotStatus }   from './slot.model';
+export { OpdSlotSession, OpdSlotStatus, SlotCategory, BookingEngine, SlotType } from './opd-slot-session.model';
+export { ProcedureType, ProcedureCategory }                           from './procedure-type.model';
+export { DoctorAvailabilityWindow, WindowBookingMode }                from './doctor-availability-window.model';
+export { DoctorAvailabilityOverride, OverrideType }                   from './doctor-availability-override.model';
+export { DoctorBookingPreference }                                    from './doctor-booking-preference.model';
+export { HospitalClosure, ClosureType }                               from './hospital-closure.model';
+export { SlotTemplate, TemplateAppliesTo }                            from './slot-template.model';
 
 // ── Tier 5 ────────────────────────────────────────────────────────────────────
 export {
@@ -41,7 +48,15 @@ export {
   AppointmentType,
   PaymentMode,
   CancellationBy,
+  VisitType,
+  PriorityTier,
 }                                      from './appointment.model';
+export { WalkInToken, WalkInTokenStatus }   from './walk-in-token.model';
+export { WaitlistEntry, WaitlistStatus }    from './waitlist-entry.model';
+export { NoShowLog }                        from './no-show-log.model';
+export { OpdReviewLog }                     from './opd-review-log.model';
+export { SlotChangeLog, SlotChangeType, SlotChangeScope } from './slot-change-log.model';
+export { OpdDailyStats }                    from './opd-daily-stats.model';
 
 // ── Tier 6 ────────────────────────────────────────────────────────────────────
 export {
@@ -208,3 +223,130 @@ HealthRecord.belongsTo(User,         { foreignKey: 'patient_id', as: 'patient' }
 import { AdminAuditLog }           from './admin-audit-log.model';
 User.hasMany(AdminAuditLog,        { foreignKey: 'admin_id',   as: 'auditLogs' });
 AdminAuditLog.belongsTo(User,        { foreignKey: 'admin_id',   as: 'admin' });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 1 — Slot Governance associations
+// ═════════════════════════════════════════════════════════════════════════════
+
+import { OpdSlotSession }              from './opd-slot-session.model';
+import { ProcedureType }               from './procedure-type.model';
+import { DoctorAvailabilityWindow }    from './doctor-availability-window.model';
+import { DoctorAvailabilityOverride }  from './doctor-availability-override.model';
+import { DoctorBookingPreference }     from './doctor-booking-preference.model';
+import { HospitalClosure }             from './hospital-closure.model';
+import { SlotTemplate }                from './slot-template.model';
+import { WalkInToken }                 from './walk-in-token.model';
+import { WaitlistEntry }               from './waitlist-entry.model';
+import { NoShowLog }                   from './no-show-log.model';
+import { OpdReviewLog }                from './opd-review-log.model';
+import { SlotChangeLog }               from './slot-change-log.model';
+import { OpdDailyStats }               from './opd-daily-stats.model';
+
+// ── OpdSlotSession ────────────────────────────────────────────────────────────
+DoctorProfile.hasMany(OpdSlotSession,  { foreignKey: 'doctor_id',   as: 'opdSlotSessions' });
+OpdSlotSession.belongsTo(DoctorProfile,  { foreignKey: 'doctor_id',   as: 'doctor' });
+
+Hospital.hasMany(OpdSlotSession,       { foreignKey: 'hospital_id', as: 'opdSlotSessions' });
+OpdSlotSession.belongsTo(Hospital,       { foreignKey: 'hospital_id', as: 'hospital' });
+
+Schedule.hasMany(OpdSlotSession,       { foreignKey: 'schedule_id', as: 'opdSlotSessions' });
+OpdSlotSession.belongsTo(Schedule,       { foreignKey: 'schedule_id', as: 'schedule' });
+
+// ── ProcedureType ─────────────────────────────────────────────────────────────
+DoctorProfile.hasMany(ProcedureType,   { foreignKey: 'doctor_id',   as: 'procedureTypes' });
+ProcedureType.belongsTo(DoctorProfile,   { foreignKey: 'doctor_id',   as: 'doctor' });
+
+Hospital.hasMany(ProcedureType,        { foreignKey: 'hospital_id', as: 'procedureTypes' });
+ProcedureType.belongsTo(Hospital,        { foreignKey: 'hospital_id', as: 'hospital' });
+
+// ── DoctorAvailabilityWindow ──────────────────────────────────────────────────
+DoctorProfile.hasMany(DoctorAvailabilityWindow, { foreignKey: 'doctor_id',   as: 'availabilityWindows' });
+DoctorAvailabilityWindow.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+Hospital.hasMany(DoctorAvailabilityWindow,      { foreignKey: 'hospital_id', as: 'availabilityWindows' });
+DoctorAvailabilityWindow.belongsTo(Hospital,      { foreignKey: 'hospital_id', as: 'hospital' });
+
+// ── DoctorAvailabilityOverride ────────────────────────────────────────────────
+DoctorProfile.hasMany(DoctorAvailabilityOverride, { foreignKey: 'doctor_id',   as: 'availabilityOverrides' });
+DoctorAvailabilityOverride.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+Hospital.hasMany(DoctorAvailabilityOverride,      { foreignKey: 'hospital_id', as: 'availabilityOverrides' });
+DoctorAvailabilityOverride.belongsTo(Hospital,      { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(DoctorAvailabilityOverride,          { foreignKey: 'created_by',  as: 'createdOverrides' });
+DoctorAvailabilityOverride.belongsTo(User,          { foreignKey: 'created_by',  as: 'createdByUser' });
+
+// ── DoctorBookingPreference ───────────────────────────────────────────────────
+DoctorProfile.hasMany(DoctorBookingPreference, { foreignKey: 'doctor_id',   as: 'bookingPreferences' });
+DoctorBookingPreference.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+Hospital.hasMany(DoctorBookingPreference,      { foreignKey: 'hospital_id', as: 'doctorBookingPreferences' });
+DoctorBookingPreference.belongsTo(Hospital,      { foreignKey: 'hospital_id', as: 'hospital' });
+
+// ── HospitalClosure ───────────────────────────────────────────────────────────
+Hospital.hasMany(HospitalClosure, { foreignKey: 'hospital_id', as: 'closures' });
+HospitalClosure.belongsTo(Hospital, { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(HospitalClosure,     { foreignKey: 'created_by',  as: 'createdClosures' });
+HospitalClosure.belongsTo(User,     { foreignKey: 'created_by',  as: 'createdByUser' });
+
+// ── SlotTemplate ──────────────────────────────────────────────────────────────
+Hospital.hasMany(SlotTemplate,    { foreignKey: 'hospital_id', as: 'slotTemplates' });
+SlotTemplate.belongsTo(Hospital,    { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(SlotTemplate,        { foreignKey: 'created_by',  as: 'createdTemplates' });
+SlotTemplate.belongsTo(User,        { foreignKey: 'created_by',  as: 'createdByUser' });
+
+// ── WalkInToken ───────────────────────────────────────────────────────────────
+DoctorProfile.hasMany(WalkInToken, { foreignKey: 'doctor_id',   as: 'walkInTokens' });
+WalkInToken.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+Hospital.hasMany(WalkInToken,      { foreignKey: 'hospital_id', as: 'walkInTokens' });
+WalkInToken.belongsTo(Hospital,      { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(WalkInToken,          { foreignKey: 'patient_id',  as: 'walkInTokens' });
+WalkInToken.belongsTo(User,          { foreignKey: 'patient_id',  as: 'patient' });
+
+// ── WaitlistEntry ─────────────────────────────────────────────────────────────
+DoctorProfile.hasMany(WaitlistEntry, { foreignKey: 'doctor_id',   as: 'waitlistEntries' });
+WaitlistEntry.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+Hospital.hasMany(WaitlistEntry,      { foreignKey: 'hospital_id', as: 'waitlistEntries' });
+WaitlistEntry.belongsTo(Hospital,      { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(WaitlistEntry,          { foreignKey: 'patient_id',  as: 'waitlistEntries' });
+WaitlistEntry.belongsTo(User,          { foreignKey: 'patient_id',  as: 'patient' });
+
+// ── NoShowLog ─────────────────────────────────────────────────────────────────
+Appointment.hasOne(NoShowLog,      { foreignKey: 'appointment_id', as: 'noShowLog' });
+NoShowLog.belongsTo(Appointment,     { foreignKey: 'appointment_id', as: 'appointment' });
+
+User.hasMany(NoShowLog,            { foreignKey: 'patient_id',     as: 'noShowLogs' });
+NoShowLog.belongsTo(User,            { foreignKey: 'patient_id',     as: 'patient' });
+
+DoctorProfile.hasMany(NoShowLog,   { foreignKey: 'doctor_id',      as: 'noShowLogs' });
+NoShowLog.belongsTo(DoctorProfile,   { foreignKey: 'doctor_id',      as: 'doctor' });
+
+// ── OpdReviewLog ──────────────────────────────────────────────────────────────
+Hospital.hasMany(OpdReviewLog,     { foreignKey: 'hospital_id', as: 'reviewLogs' });
+OpdReviewLog.belongsTo(Hospital,     { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(OpdReviewLog,         { foreignKey: 'reviewed_by',  as: 'opdReviews' });
+OpdReviewLog.belongsTo(User,         { foreignKey: 'reviewed_by',  as: 'reviewedByUser' });
+
+// ── SlotChangeLog ─────────────────────────────────────────────────────────────
+Hospital.hasMany(SlotChangeLog,    { foreignKey: 'hospital_id', as: 'slotChangeLogs' });
+SlotChangeLog.belongsTo(Hospital,    { foreignKey: 'hospital_id', as: 'hospital' });
+
+DoctorProfile.hasMany(SlotChangeLog, { foreignKey: 'doctor_id',  as: 'slotChangeLogs' });
+SlotChangeLog.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+User.hasMany(SlotChangeLog,          { foreignKey: 'created_by', as: 'slotChangeLogs' });
+SlotChangeLog.belongsTo(User,          { foreignKey: 'created_by', as: 'createdByUser' });
+
+// ── OpdDailyStats ─────────────────────────────────────────────────────────────
+Hospital.hasMany(OpdDailyStats,    { foreignKey: 'hospital_id', as: 'dailyStats' });
+OpdDailyStats.belongsTo(Hospital,    { foreignKey: 'hospital_id', as: 'hospital' });
+
+DoctorProfile.hasMany(OpdDailyStats, { foreignKey: 'doctor_id',  as: 'dailyStats' });
+OpdDailyStats.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });

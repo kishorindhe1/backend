@@ -45,6 +45,23 @@ export enum CancellationBy {
   SYSTEM  = 'system',
 }
 
+export enum VisitType {
+  NEW_CONSULTATION = 'new_consultation',
+  FOLLOW_UP        = 'follow_up',
+  TEST_REVIEW      = 'test_review',
+  PROCEDURE        = 'procedure',
+  EMERGENCY        = 'emergency',
+}
+
+export enum PriorityTier {
+  EMERGENCY         = 'emergency',
+  SENIOR            = 'senior',
+  DIFFERENTLY_ABLED = 'differently_abled',
+  PREGNANT          = 'pregnant',
+  FOLLOW_UP         = 'follow_up',
+  REGULAR           = 'regular',
+}
+
 export class Appointment extends Model<
   InferAttributes<Appointment>,
   InferCreationAttributes<Appointment>
@@ -65,12 +82,25 @@ export class Appointment extends Model<
   declare platform_fee:        CreationOptional<number>;
   declare doctor_payout:       CreationOptional<number>;
 
-  declare notes:               string | null;     // patient notes at booking
+  declare notes:               string | null;
   declare cancellation_reason: string | null;
   declare cancelled_by:        CancellationBy | null;
   declare cancelled_at:        Date | null;
 
   declare razorpay_order_id:   string | null;
+
+  // Phase 1 additions
+  declare chief_complaint:        string | null;
+  declare visit_type:             VisitType | null;
+  declare visit_subtype:          string | null;       // procedure name for gap-based
+  declare procedure_type_id:      string | null;
+  declare referred_by_doctor_id:  string | null;
+  declare referring_hospital_id:  string | null;
+  declare original_doctor_id:     string | null;       // set on substitution
+  declare substitution_reason:    string | null;
+  declare checked_in_at:          Date | null;
+  declare priority_tier:          CreationOptional<PriorityTier>;
+  declare priority_reason:        string | null;
 
   declare created_at:  CreationOptional<Date>;
   declare updated_at:  CreationOptional<Date>;
@@ -112,6 +142,26 @@ Appointment.init(
     cancelled_at:        { type: DataTypes.DATE,       allowNull: true },
 
     razorpay_order_id:   { type: DataTypes.STRING(100), allowNull: true },
+
+    // Phase 1 additions
+    chief_complaint:       { type: DataTypes.STRING(500), allowNull: true },
+    visit_type: {
+      type: DataTypes.ENUM(...Object.values(VisitType)),
+      allowNull: true,
+    },
+    visit_subtype:         { type: DataTypes.STRING(100), allowNull: true },
+    procedure_type_id:     { type: DataTypes.UUID,        allowNull: true },
+    referred_by_doctor_id: { type: DataTypes.UUID,        allowNull: true },
+    referring_hospital_id: { type: DataTypes.UUID,        allowNull: true },
+    original_doctor_id:    { type: DataTypes.UUID,        allowNull: true },
+    substitution_reason:   { type: DataTypes.STRING(300), allowNull: true },
+    checked_in_at:         { type: DataTypes.DATE,        allowNull: true },
+    priority_tier: {
+      type: DataTypes.ENUM(...Object.values(PriorityTier)),
+      allowNull: false, defaultValue: PriorityTier.REGULAR,
+    },
+    priority_reason:       { type: DataTypes.STRING(200), allowNull: true },
+
     created_at: DataTypes.DATE,
     updated_at: DataTypes.DATE,
   },
