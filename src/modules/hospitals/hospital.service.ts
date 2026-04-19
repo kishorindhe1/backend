@@ -1,13 +1,19 @@
+import crypto from 'crypto';
 import { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode, PaymentCollectionMode } from '../../models';
 import { HospitalStaff, StaffRole }                 from '../../models';
 import { User }                from '../../models';
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { logger }              from '../../utils/logger';
+import { hashOTP }             from '../../utils/helpers';
+import { sendEmail }           from '../../utils/smsProvider';
+import { renderEmailTemplate, EMAIL_SUBJECTS } from '../../templates/email';
+import { env }                 from '../../config/env';
 
 // ── Register hospital ─────────────────────────────────────────────────────────
 export interface RegisterHospitalInput {
   admin_mobile:  string;
   admin_name:    string;
+  admin_email:   string;
   hospital_name: string;
   city:          string;
   state:         string;
@@ -17,11 +23,16 @@ export interface RegisterHospitalInput {
 export async function registerHospital(
   input: RegisterHospitalInput,
 ): Promise<ServiceResponse<object>> {
+  // Check email uniqueness before creating
+  const existingEmail = await User.findOne({ where: { email: input.admin_email } });
+  if (existingEmail) return fail('EMAIL_TAKEN', 'This email address is already in use.', 409);
+
   // Find or create admin user
   const [adminUser] = await User.findOrCreate({
     where: { mobile: input.admin_mobile },
     defaults: {
       mobile:         input.admin_mobile,
+      email:          input.admin_email,
       country_code:   '+91',
       role:           UserRole.HOSPITAL_ADMIN,
       account_status: AccountStatus.ACTIVE,
@@ -32,6 +43,11 @@ export async function registerHospital(
       deleted_at:     null,
     },
   });
+
+  // Save email if user already existed without one
+  if (!adminUser.email) {
+    await adminUser.update({ email: input.admin_email, role: UserRole.HOSPITAL_ADMIN });
+  }
 
   // Create hospital
   const hospital = await Hospital.create({
@@ -100,7 +116,50 @@ export async function updateOnboardingStatus(
   await hospital.update(updates);
   logger.info('Hospital onboarding status updated', { hospitalId, newStatus, adminId });
 
+  if (newStatus === OnboardingStatus.LIVE) {
+    await sendHospitalInvite(hospitalId, hospital.name).catch((err) =>
+      logger.error('Failed to send hospital invite email', { hospitalId, err }),
+    );
+  }
+
   return ok({ hospital_id: hospitalId, onboarding_status: newStatus });
+}
+
+async function sendHospitalInvite(hospitalId: string, hospitalName: string): Promise<void> {
+  const staffRecord = await HospitalStaff.findOne({
+    where: { hospital_id: hospitalId, is_active: true },
+    include: [{ model: User, as: 'user' }],
+    order: [['created_at', 'ASC']],
+  });
+
+  const adminUser = (staffRecord as HospitalStaff & { user?: User })?.user;
+  if (!adminUser?.email) {
+    logger.warn('No admin email found for hospital invite', { hospitalId });
+    return;
+  }
+
+  // Generate a secure 48-hour invite token
+  const rawToken    = crypto.randomBytes(32).toString('hex');
+  const tokenHash   = await hashOTP(rawToken);
+  const expiresAt   = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+  await adminUser.update({ otp_secret: tokenHash, otp_expires_at: expiresAt, otp_attempts: 0 });
+
+  const inviteUrl = `${env.ADMIN_PANEL_URL}/accept-invite?token=${rawToken}&email=${encodeURIComponent(adminUser.email)}`;
+
+  const html = renderEmailTemplate('hospital_invite', {
+    hospital_name: hospitalName,
+    invite_url:    inviteUrl,
+  });
+
+  await sendEmail(
+    adminUser.email,
+    EMAIL_SUBJECTS['hospital_invite'] ?? `Welcome to Upcharify — Set Up Your Account`,
+    `Your hospital "${hospitalName}" is now live on Upcharify. Set up your admin account: ${inviteUrl}`,
+    html,
+  );
+
+  logger.info('Hospital invite email sent', { hospitalId, adminEmail: adminUser.email });
 }
 
 // ── Get hospital by ID ────────────────────────────────────────────────────────

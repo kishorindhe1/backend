@@ -58,4 +58,5 @@ export const EMAIL_SUBJECTS: Record<string, string> = {
   queue_position_alert:      'Your Turn is Almost Here — Head to the Clinic',
   payment_successful:        'Payment Confirmed ₹{{amount}} — Upcharify',
   refund_initiated:          'Refund Initiated ₹{{amount}} — Upcharify',
+  hospital_invite:           'Welcome to Upcharify — Set Up Your Hospital Account',
 };

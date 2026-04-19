@@ -49,4 +49,26 @@ router.post('/verify-2fa', authRateLimiter, validate(TwoFactorSchema), asyncHand
   res.json({ success: true, data: result.data });
 }));
 
+const AcceptInviteSchema = z.object({
+  body: z.object({
+    email:    z.string().email(),
+    token:    z.string().min(1),
+    password: z.string().min(8, 'Password must be at least 8 characters'),
+  }),
+});
+
+/**
+ * POST /admin/auth/accept-invite
+ * Hospital admin sets their password using the invite token from email
+ */
+router.post('/accept-invite', authRateLimiter, validate(AcceptInviteSchema), asyncHandler(async (req, res) => {
+  const { email, token, password } = req.body as { email: string; token: string; password: string };
+  const result = await AdminAuthService.acceptHospitalInvite(email, token, password);
+  if (!result.success) {
+    res.status(result.statusCode).json({ success: false, error: { code: result.code, message: result.message } });
+    return;
+  }
+  res.json({ success: true, data: result.data });
+}));
+
 export default router;

@@ -84,6 +84,9 @@ const envSchema = z.object({
 
   // Teleconsult
   TELECONSULT_BASE_URL:  z.string().default('https://consult.upcharify.com'),
+
+  // Admin panel URL (used in invite emails)
+  ADMIN_PANEL_URL: z.string().default('https://admin.upcharify.com'),
 });
 
 const parsed = envSchema.safeParse(process.env);

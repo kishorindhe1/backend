@@ -1,6 +1,6 @@
 import { env }                        from '../../config/env';
 import { redis, RedisKeys, RedisTTL } from '../../config/redis';
-import { User, HospitalStaff }        from '../../models';
+import { User, HospitalStaff, DoctorHospitalAffiliation } from '../../models';
 import { generateOTP, hashOTP, verifyOTP, hashPassword, verifyPassword, addMinutes } from '../../utils/helpers';
 import {
   issueTokenPair, storeRefreshToken, blacklistToken, invalidateRefreshToken, TokenPair,
@@ -10,7 +10,7 @@ import { ErrorFactory } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { sendEmail } from '../../utils/smsProvider';
 
-const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST];
+const ADMIN_ROLES: UserRole[] = [UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST, UserRole.DOCTOR];
 const TFA_EXPIRY_MINUTES = 10;
 
 export interface AdminLoginResult {
@@ -133,7 +133,7 @@ export async function verifyAdminTwoFactor(email: string, otp: string): Promise<
   await user.update({ otp_secret: null, otp_expires_at: null, otp_attempts: 0, last_login_at: new Date() });
   await redis.del(RedisKeys.adminTfaCooldown(email));
 
-  // Resolve hospital_id for hospital_admin / receptionist
+  // Resolve hospital_id for hospital_admin / receptionist / doctor
   let hospitalId: string | undefined;
   if (user.role === UserRole.HOSPITAL_ADMIN || user.role === UserRole.RECEPTIONIST) {
     const staffRecord = await HospitalStaff.findOne({
@@ -141,6 +141,14 @@ export async function verifyAdminTwoFactor(email: string, otp: string): Promise<
       order: [['created_at', 'DESC']],
     });
     hospitalId = staffRecord?.hospital_id ?? undefined;
+  } else if (user.role === UserRole.DOCTOR) {
+    const affiliation = await DoctorHospitalAffiliation.findOne({
+      where: { doctor_id: user.id, is_primary: true, is_active: true },
+    }) ?? await DoctorHospitalAffiliation.findOne({
+      where: { doctor_id: user.id, is_active: true },
+      order: [['created_at', 'ASC']],
+    });
+    hospitalId = affiliation?.hospital_id ?? undefined;
   }
 
   const tokens = issueTokenPair({ userId: user.id, role: user.role, accountStatus: user.account_status, hospitalId });
@@ -148,6 +156,65 @@ export async function verifyAdminTwoFactor(email: string, otp: string): Promise<
 
   logger.info('Admin logged in', { userId: user.id, email: maskEmail(email), role: user.role });
   return ok({ tokens, user: { id: user.id, email, role: user.role, account_status: user.account_status } });
+}
+
+// ─── Accept hospital invite (set password via email invite link) ──────────────
+
+export interface AcceptInviteResult {
+  tokens: TokenPair;
+  user: { id: string; email: string; role: UserRole; };
+}
+
+export async function acceptHospitalInvite(
+  email: string,
+  token: string,
+  password: string,
+): Promise<ServiceResponse<AcceptInviteResult>> {
+  const user = await User.findOne({ where: { email } });
+
+  if (!user || user.role !== UserRole.HOSPITAL_ADMIN) {
+    return fail('INVITE_INVALID', 'Invalid or expired invite link.', 400);
+  }
+
+  if (!user.otp_secret || !user.otp_expires_at) {
+    return fail('INVITE_INVALID', 'Invite link has already been used or has expired.', 400);
+  }
+
+  if (user.otp_expires_at < new Date()) {
+    await user.update({ otp_secret: null, otp_expires_at: null });
+    return fail('INVITE_EXPIRED', 'Invite link has expired. Please contact your administrator.', 400);
+  }
+
+  const isValid = await verifyOTP(token, user.otp_secret);
+  if (!isValid) return fail('INVITE_INVALID', 'Invalid or expired invite link.', 400);
+
+  const passwordHash = await hashPassword(password);
+  await user.update({
+    password_hash:  passwordHash,
+    otp_secret:     null,
+    otp_expires_at: null,
+    otp_attempts:   0,
+    account_status: AccountStatus.ACTIVE,
+    last_login_at:  new Date(),
+  });
+
+  // Resolve hospital_id for the token
+  const { HospitalStaff } = await import('../../models');
+  const staffRecord = await HospitalStaff.findOne({
+    where: { user_id: user.id, is_active: true },
+    order: [['created_at', 'DESC']],
+  });
+
+  const tokens = issueTokenPair({
+    userId: user.id,
+    role: user.role,
+    accountStatus: AccountStatus.ACTIVE,
+    hospitalId: staffRecord?.hospital_id ?? undefined,
+  });
+  await storeRefreshToken(user.id, tokens.refresh_token);
+
+  logger.info('Hospital admin accepted invite', { userId: user.id, email: maskEmail(email) });
+  return ok({ tokens, user: { id: user.id, email, role: user.role } });
 }
 
 // ─── admin account setup (for seeding / super admin bootstrap) ─────────────

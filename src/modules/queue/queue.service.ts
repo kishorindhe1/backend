@@ -148,6 +148,7 @@ export async function getDoctorDayQueue(
 // ── Public display data (no PII — token numbers only) ────────────────────────
 
 export interface QueueDisplayResult {
+  doctor_id:      string;
   doctor:         { full_name: string; specialization: string };
   hospital:       { name: string; city: string };
   current_token:  number | null;
@@ -191,6 +192,7 @@ export async function getQueueDisplay(
   const nextTokens = waiting.slice(0, 5).map((e) => e.queue_position);
 
   const result: QueueDisplayResult = {
+    doctor_id:     doctorId,
     doctor:        { full_name: (doctor as any).full_name, specialization: (doctor as any).specialization },
     hospital:      { name: (hospital as any).name, city: (hospital as any).city },
     current_token: current?.queue_position ?? null,

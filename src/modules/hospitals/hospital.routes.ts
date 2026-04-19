@@ -21,6 +21,7 @@ const RegisterHospitalSchema = z.object({
   body: z.object({
     admin_mobile:  z.string().regex(/^[6-9]\d{9}$/),
     admin_name:    z.string().trim().min(2).max(100),
+    admin_email:   z.string().email('Invalid admin email address'),
     hospital_name: z.string().trim().min(2).max(200),
     city:          z.string().trim().min(2).max(100),
     state:         z.string().trim().min(2).max(100),
