@@ -117,7 +117,7 @@ export async function updateOnboardingStatus(
   logger.info('Hospital onboarding status updated', { hospitalId, newStatus, adminId });
 
   if (newStatus === OnboardingStatus.LIVE) {
-    await sendHospitalInvite(hospitalId, hospital.name).catch((err) =>
+    await _sendHospitalInvite(hospitalId, hospital.name).catch((err) =>
       logger.error('Failed to send hospital invite email', { hospitalId, err }),
     );
   }
@@ -125,7 +125,15 @@ export async function updateOnboardingStatus(
   return ok({ hospital_id: hospitalId, onboarding_status: newStatus });
 }
 
-async function sendHospitalInvite(hospitalId: string, hospitalName: string): Promise<void> {
+export async function sendHospitalInvite(hospitalId: string, hospitalName?: string): Promise<ServiceResponse<{ message: string }>> {
+  const hospital = hospitalName ? null : await Hospital.findByPk(hospitalId);
+  const name = hospitalName ?? hospital?.name;
+  if (!name) return fail('HOSPITAL_NOT_FOUND', 'Hospital not found.', 404);
+  await _sendHospitalInvite(hospitalId, name);
+  return ok({ message: 'Invite email sent successfully.' });
+}
+
+async function _sendHospitalInvite(hospitalId: string, hospitalName: string): Promise<void> {
   const staffRecord = await HospitalStaff.findOne({
     where: { hospital_id: hospitalId, is_active: true },
     include: [{ model: User, as: 'user' }],

@@ -273,6 +273,40 @@ router.get('/hospitals/:id',
   }),
 );
 
+router.patch('/hospitals/:id',
+  requirePermission(Permission.HOSPITALS_MANAGE),
+  validate(z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body: z.object({
+      name:             z.string().trim().min(2).max(200).optional(),
+      legal_name:       z.string().trim().max(200).nullable().optional(),
+      registration_number: z.string().trim().max(100).nullable().optional(),
+      hospital_type:    z.enum(['clinic','nursing_home','hospital','diagnostic_center']).optional(),
+      phone_primary:    z.string().trim().max(20).nullable().optional(),
+      phone_secondary:  z.string().trim().max(20).nullable().optional(),
+      email_general:    z.string().email().nullable().optional(),
+      website:          z.string().url().nullable().optional(),
+      gst_number:       z.string().trim().max(20).nullable().optional(),
+      established_year: z.number().int().min(1800).max(new Date().getFullYear()).nullable().optional(),
+      bed_count:        z.number().int().min(0).nullable().optional(),
+      address_line1:    z.string().trim().max(300).nullable().optional(),
+      address_line2:    z.string().trim().max(300).nullable().optional(),
+      city:             z.string().trim().min(2).max(100).optional(),
+      state:            z.string().trim().min(2).max(100).optional(),
+      pincode:          z.string().trim().max(10).nullable().optional(),
+      latitude:         z.number().min(-90).max(90).nullable().optional(),
+      longitude:        z.number().min(-180).max(180).nullable().optional(),
+    }).strict(),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { Hospital } = await import('../../models');
+    const hospital = await Hospital.findByPk(param(req, 'id'));
+    if (!hospital) { sendError(res, 404, { code: 'HOSPITAL_NOT_FOUND', message: 'Hospital not found.' }); return; }
+    await hospital.update(req.body);
+    sendSuccess(res, hospital);
+  }),
+);
+
 router.patch('/hospitals/:id/status',
   requirePermission(Permission.HOSPITALS_MANAGE),
   validate(ToggleHospitalSchema),
@@ -280,6 +314,17 @@ router.patch('/hospitals/:id/status',
     const user = req.user as JwtAccessPayload;
     const { action, reason } = req.body as { action: 'suspend' | 'activate'; reason?: string };
     const result = await AdminService.updateHospitalStatus(param(req, 'id'), action, user.sub, reason);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+router.post('/hospitals/:id/resend-invite',
+  requirePermission(Permission.HOSPITALS_MANAGE),
+  validate(UuidParamSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { sendHospitalInvite } = await import('../hospitals/hospital.service');
+    const result = await sendHospitalInvite(param(req, 'id'));
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
   }),

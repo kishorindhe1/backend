@@ -48,8 +48,14 @@ export class Hospital extends Model<
 
   // Contact
   declare phone_primary:     string | null;
+  declare phone_secondary:   string | null;
   declare email_general:     string | null;
   declare website:           string | null;
+
+  // Business
+  declare gst_number:        string | null;
+  declare established_year:  number | null;
+  declare bed_count:         number | null;
 
   // Location
   declare address_line1:     string | null;
@@ -89,8 +95,12 @@ Hospital.init(
     },
 
     phone_primary:   { type: DataTypes.STRING(20),  allowNull: true },
+    phone_secondary: { type: DataTypes.STRING(20),  allowNull: true },
     email_general:   { type: DataTypes.STRING(200), allowNull: true },
     website:         { type: DataTypes.STRING(500), allowNull: true },
+    gst_number:      { type: DataTypes.STRING(20),  allowNull: true },
+    established_year:{ type: DataTypes.INTEGER,     allowNull: true },
+    bed_count:       { type: DataTypes.INTEGER,     allowNull: true },
 
     address_line1: { type: DataTypes.STRING(300), allowNull: true },
     address_line2: { type: DataTypes.STRING(300), allowNull: true },
