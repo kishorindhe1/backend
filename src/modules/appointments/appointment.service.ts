@@ -446,7 +446,7 @@ export async function acceptAppointment(
   }
 
   await appointment.update({ status: AppointmentStatus.PENDING });
-
+ console.log("checking")
   const doctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
   await enqueueNotification({
     userId:        appointment.patient_id,
