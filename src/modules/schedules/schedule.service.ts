@@ -222,6 +222,33 @@ export async function getAvailableSlots(
   return ok(result);
 }
 
+// ── Get ALL slots for admin view (all statuses) ───────────────────────────────
+export async function getAllSlotsForAdmin(
+  doctorId: string,
+  hospitalId: string,
+  date: string,
+): Promise<ServiceResponse<object[]>> {
+  const dayStart = new Date(`${date}T00:00:00.000Z`);
+  const dayEnd   = new Date(`${date}T23:59:59.999Z`);
+
+  const slots = await GeneratedSlot.findAll({
+    where: {
+      doctor_id:   doctorId,
+      hospital_id: hospitalId,
+      slot_datetime: { [Op.between]: [dayStart, dayEnd] },
+    },
+    order: [['slot_datetime', 'ASC']],
+  });
+
+  return ok(slots.map((s) => ({
+    slot_id:          s.id,
+    slot_datetime:    s.slot_datetime,
+    duration_minutes: s.duration_minutes,
+    status:           s.status,
+    blocked_reason:   s.blocked_reason,
+  })));
+}
+
 // ── Unblock a slot ────────────────────────────────────────────────────────────
 export async function unblockSlot(
   slotId: string,

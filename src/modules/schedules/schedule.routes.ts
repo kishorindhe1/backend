@@ -59,6 +59,15 @@ async function getAvailableSlots(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function getAdminSlots(req: Request, res: Response): Promise<void> {
+  const { doctorId, hospitalId } = req.params as { doctorId: string; hospitalId: string };
+  const { date } = req.query as { date: string };
+
+  const result = await ScheduleService.getAllSlotsForAdmin(doctorId, hospitalId, date);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function triggerSlotGeneration(req: Request, res: Response): Promise<void> {
   const { doctor_id, hospital_id, from_date, to_date } = req.body as {
     doctor_id: string; hospital_id: string; from_date: string; to_date: string;
@@ -94,11 +103,20 @@ router.get(
   asyncHandler(getSchedules),
 );
 
-// Public — patients browse slots
+// Public — patients browse slots (available only)
 router.get(
   '/:doctorId/:hospitalId/slots',
   validate(GetSlotsSchema),
   asyncHandler(getAvailableSlots),
+);
+
+// Protected — admin views all slots (available + booked + blocked)
+router.get(
+  '/:doctorId/:hospitalId/admin-slots',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST),
+  validate(GetSlotsSchema),
+  asyncHandler(getAdminSlots),
 );
 
 // Protected — deactivate a schedule
