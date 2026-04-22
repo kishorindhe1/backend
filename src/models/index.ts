@@ -95,6 +95,10 @@ export { HealthRecord, RecordType }        from './health-record.model';
 // ── Admin ──────────────────────────────────────────────────────────────────────
 export { AdminAuditLog, AdminAction }      from './admin-audit-log.model';
 
+// ── Patient Lookup ─────────────────────────────────────────────────────────────
+export { HospitalPatient }                 from './hospital-patient.model';
+export { HospitalCollection, CollectionMode } from './hospital-collection.model';
+
 import { DoctorSearchIndex }           from './doctor-search-index.model';
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -223,6 +227,26 @@ HealthRecord.belongsTo(User,         { foreignKey: 'patient_id', as: 'patient' }
 import { AdminAuditLog }           from './admin-audit-log.model';
 User.hasMany(AdminAuditLog,        { foreignKey: 'admin_id',   as: 'auditLogs' });
 AdminAuditLog.belongsTo(User,        { foreignKey: 'admin_id',   as: 'admin' });
+
+// ── HospitalPatient ───────────────────────────────────────────────────────────
+import { HospitalPatient }         from './hospital-patient.model';
+import { HospitalCollection }      from './hospital-collection.model';
+
+Hospital.hasMany(HospitalPatient,  { foreignKey: 'hospital_id', as: 'hospitalPatients' });
+HospitalPatient.belongsTo(Hospital,  { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(HospitalPatient,      { foreignKey: 'patient_id',  as: 'hospitalRelations' });
+HospitalPatient.belongsTo(User,      { foreignKey: 'patient_id',  as: 'patient' });
+
+// ── HospitalCollection ────────────────────────────────────────────────────────
+Hospital.hasMany(HospitalCollection,   { foreignKey: 'hospital_id', as: 'collections' });
+HospitalCollection.belongsTo(Hospital,   { foreignKey: 'hospital_id', as: 'hospital' });
+
+User.hasMany(HospitalCollection,       { foreignKey: 'patient_id',  as: 'hospitalCollections' });
+HospitalCollection.belongsTo(User,       { foreignKey: 'patient_id',  as: 'patient' });
+
+User.hasMany(HospitalCollection,       { foreignKey: 'collected_by', as: 'collectedPayments' });
+HospitalCollection.belongsTo(User,       { foreignKey: 'collected_by', as: 'collectedByUser' });
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 1 — Slot Governance associations

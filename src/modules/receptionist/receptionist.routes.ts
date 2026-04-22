@@ -6,6 +6,8 @@ import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload, UserRole } from '../../types';
 import { asyncHandler }               from '../../utils/asyncHandler';
 import { z }                          from 'zod';
+import { CollectionMode }             from '../../models';
+import { Gender }                     from '../../models';
 
 const param = (req: Request, k: string) => String((req.params as Record<string,string>)[k] ?? '');
 const STAFF = [UserRole.RECEPTIONIST, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN];
@@ -29,6 +31,37 @@ const WalkInSchema = z.object({
     doctor_id:      z.string().uuid(),
     hospital_id:    z.string().uuid(),
     patient_mobile: z.string().regex(/^[6-9]\d{9}$/),
+  }),
+});
+
+const QuickRegisterSchema = z.object({
+  body: z.object({
+    mobile:     z.string().regex(/^[6-9]\d{9}$/),
+    full_name:  z.string().min(2).max(100),
+    age:        z.number().int().min(0).max(130).optional(),
+    gender:     z.nativeEnum(Gender).optional(),
+    hospital_id: z.string().uuid(),
+  }),
+});
+
+const StartVisitSchema = z.object({
+  params: z.object({ patientId: z.string().uuid() }),
+  body:   z.object({
+    hospital_id: z.string().uuid(),
+    doctor_id:   z.string().uuid(),
+    patient_name: z.string().optional(),
+  }),
+});
+
+const CollectPaymentSchema = z.object({
+  body: z.object({
+    hospital_id:     z.string().uuid(),
+    patient_id:      z.string().uuid().optional(),
+    amount:          z.number().positive(),
+    mode:            z.nativeEnum(CollectionMode),
+    appointment_id:  z.string().uuid().optional(),
+    opd_token_id:    z.string().uuid().optional(),
+    notes:           z.string().max(200).optional(),
   }),
 });
 
@@ -103,6 +136,50 @@ async function bookWalkIn(req: Request, res: Response): Promise<void> {
   sendCreated(res, result.data);
 }
 
+async function lookupPatient(req: Request, res: Response): Promise<void> {
+  const { q, hospital_id } = req.query as { q?: string; hospital_id?: string };
+  if (!q || !hospital_id) { sendError(res, 400, { code: 'MISSING_PARAMS', message: 'q and hospital_id are required.' }); return; }
+  const result = await ReceptionistService.patientLookup(q, hospital_id);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
+async function registerPatient(req: Request, res: Response): Promise<void> {
+  const user = req.user as JwtAccessPayload;
+  const body = req.body as { mobile: string; full_name: string; age?: number; gender?: Gender; hospital_id: string };
+  const result = await ReceptionistService.quickRegister({ ...body, registered_by: user.sub });
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}
+
+async function startVisitHandler(req: Request, res: Response): Promise<void> {
+  const user = req.user as JwtAccessPayload;
+  const patient_id = param(req, 'patientId');
+  const { hospital_id, doctor_id, patient_name } = req.body as { hospital_id: string; doctor_id: string; patient_name?: string };
+  const result = await ReceptionistService.startVisit({ patient_id, hospital_id, doctor_id, created_by: user.sub, patient_name });
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}
+
+async function collectPaymentHandler(req: Request, res: Response): Promise<void> {
+  const user = req.user as JwtAccessPayload;
+  const body = req.body as {
+    hospital_id: string; patient_id?: string; amount: number; mode: CollectionMode;
+    appointment_id?: string; opd_token_id?: string; notes?: string;
+  };
+  const result = await ReceptionistService.collectPayment({ ...body, collected_by: user.sub });
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}
+
+async function getCollectionsHandler(req: Request, res: Response): Promise<void> {
+  const { hospital_id, date, doctor_id } = req.query as { hospital_id?: string; date?: string; doctor_id?: string };
+  if (!hospital_id || !date) { sendError(res, 400, { code: 'MISSING_PARAMS', message: 'hospital_id and date are required.' }); return; }
+  const result = await ReceptionistService.getCollections(hospital_id, date, doctor_id);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 router.use(authenticate, requireRole(...STAFF));
@@ -120,5 +197,12 @@ router.post  ('/doctors/:doctorId/:hospitalId/absent',     validate(AbsentSchema
 
 // Walk-in booking
 router.post('/walk-in', validate(WalkInSchema), asyncHandler(bookWalkIn));
+
+// Patient Lookup
+router.get ('/patients/lookup',                                              asyncHandler(lookupPatient));
+router.post('/patients/quick-register', validate(QuickRegisterSchema),       asyncHandler(registerPatient));
+router.post('/patients/:patientId/start-visit', validate(StartVisitSchema),  asyncHandler(startVisitHandler));
+router.post('/collections',             validate(CollectPaymentSchema),       asyncHandler(collectPaymentHandler));
+router.get ('/collections',                                                   asyncHandler(getCollectionsHandler));
 
 export default router;

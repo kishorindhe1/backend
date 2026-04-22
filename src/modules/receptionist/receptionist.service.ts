@@ -1,4 +1,4 @@
-import { Op } from 'sequelize';
+import { Op, fn, col, literal } from 'sequelize';
 import { sequelize }                  from '../../config/database';
 import {
   ConsultationQueue, QueueStatus,
@@ -7,9 +7,14 @@ import {
   DoctorDelayEvent, DelayStatus, DelayType,
   DoctorHospitalAffiliation,
   DoctorProfile,
+  PatientProfile, Gender,
   GeneratedSlot, SlotStatus,
   OpdSlotSession, OpdSlotStatus,
+  OpdSession, OpdSessionStatus,
+  OpdToken, OpdTokenType,
   WalkInToken, WalkInTokenStatus,
+  HospitalPatient,
+  HospitalCollection, CollectionMode,
   User,
 }                                     from '../../models';
 import { NotificationChannel } from '../../models';
@@ -448,4 +453,252 @@ async function updateAvgConsultationTime(doctorId: string, completedEntry: Consu
   const current = Number(doc.avg_consultation_minutes);
   const updated = Math.round((current * 0.9 + durationMin * 0.1) * 100) / 100;
   await doc.update({ avg_consultation_minutes: updated });
+}
+
+// ── Patient Lookup ────────────────────────────────────────────────────────────
+export async function patientLookup(
+  query:      string,
+  hospitalId: string,
+): Promise<ServiceResponse<object>> {
+  const isMobile = /^\d{7,15}$/.test(query.trim());
+
+  // Find matching users
+  let users: User[];
+  if (isMobile) {
+    users = await User.findAll({
+      where: { mobile: query.trim() },
+      include: [{ model: PatientProfile, as: 'patientProfile' }],
+    });
+  } else {
+    users = await User.findAll({
+      include: [{
+        model: PatientProfile,
+        as: 'patientProfile',
+        where: { full_name: { [Op.iLike]: `%${query.trim()}%` } },
+        required: true,
+      }],
+      limit: 10,
+    });
+  }
+
+  if (!users.length) return ok({ case: 'not_found', patients: [] });
+
+  const results = await Promise.all(users.map(async (user) => {
+    const profile = (user as any).patientProfile as PatientProfile | null;
+    const hospitalPatient = await HospitalPatient.findOne({
+      where: { hospital_id: hospitalId, patient_id: user.id },
+    });
+
+    return {
+      patient_id:   user.id,
+      mobile:       user.mobile,
+      full_name:    profile?.full_name ?? null,
+      gender:       profile?.gender ?? null,
+      date_of_birth: profile?.date_of_birth ?? null,
+      case:         hospitalPatient ? 'returning' : 'first_visit',
+      hospital_record: hospitalPatient ? {
+        first_visit_at: hospitalPatient.first_visit_at,
+        last_visit_at:  hospitalPatient.last_visit_at,
+        total_visits:   hospitalPatient.total_visits,
+        notes:          hospitalPatient.notes,
+      } : null,
+    };
+  }));
+
+  return ok({ patients: results });
+}
+
+// ── Quick Register ────────────────────────────────────────────────────────────
+export interface QuickRegisterInput {
+  mobile:     string;
+  full_name:  string;
+  age?:       number;
+  gender?:    Gender;
+  hospital_id: string;
+  registered_by: string;
+}
+
+export async function quickRegister(input: QuickRegisterInput): Promise<ServiceResponse<object>> {
+  const { mobile, full_name, age, gender, hospital_id, registered_by } = input;
+
+  const existing = await User.findOne({ where: { mobile } });
+  if (existing) return fail('MOBILE_TAKEN', 'A patient with this mobile number already exists. Use patient lookup.', 409);
+
+  const today = new Date().toISOString().split('T')[0];
+
+  const result = await sequelize.transaction(async (t) => {
+    const user = await User.create({
+      mobile,
+      country_code:   '+91',
+      role:           UserRole.PATIENT,
+      account_status: AccountStatus.ACTIVE,
+      email:          null,
+      password_hash:  null,
+      otp_secret:     null,
+      otp_expires_at: null,
+      otp_attempts:   0,
+      last_login_at:  null,
+      deleted_at:     null,
+    }, { transaction: t });
+
+    let dob: Date | null = null;
+    if (age) {
+      dob = new Date();
+      dob.setFullYear(dob.getFullYear() - age);
+    }
+
+    await PatientProfile.create({
+      user_id:       user.id,
+      full_name,
+      gender:        gender ?? null,
+      date_of_birth: dob,
+      email:         null,
+      blood_group:   null,
+      profile_photo_url: null,
+      completed_at:  null,
+    } as any, { transaction: t });
+
+    await HospitalPatient.create({
+      hospital_id,
+      patient_id:    user.id,
+      first_visit_at: today,
+      last_visit_at:  today,
+      total_visits:   1,
+      notes:          null,
+    }, { transaction: t });
+
+    return user;
+  });
+
+  logger.info('Patient quick-registered', { userId: result.id, mobile, hospital_id, registered_by });
+  return ok({ patient_id: result.id, mobile, full_name, message: 'Patient registered successfully.' });
+}
+
+// ── Start Visit (upsert hospital_patients + issue walk-in token) ──────────────
+export interface StartVisitInput {
+  patient_id:  string;
+  hospital_id: string;
+  doctor_id:   string;
+  created_by:  string;
+  patient_name?: string;
+}
+
+export async function startVisit(input: StartVisitInput): Promise<ServiceResponse<object>> {
+  const { patient_id, hospital_id, doctor_id, created_by, patient_name } = input;
+
+  const today = new Date().toISOString().split('T')[0];
+
+  // Upsert hospital_patients record
+  const existing = await HospitalPatient.findOne({ where: { hospital_id, patient_id } });
+  if (existing) {
+    await existing.update({ last_visit_at: today, total_visits: existing.total_visits + 1 });
+  } else {
+    await HospitalPatient.create({
+      hospital_id,
+      patient_id,
+      first_visit_at: today,
+      last_visit_at:  today,
+      total_visits:   1,
+      notes:          null,
+    });
+  }
+
+  // Issue walk-in token
+  const tokenResult = await issueWalkInToken({ doctor_id, hospital_id, patient_id, patient_name, created_by });
+
+  logger.info('Visit started', { patient_id, hospital_id, doctor_id });
+  return tokenResult;
+}
+
+// ── Collect Payment ───────────────────────────────────────────────────────────
+export interface CollectPaymentInput {
+  hospital_id:     string;
+  patient_id?:     string;
+  amount:          number;
+  mode:            CollectionMode;
+  collected_by:    string;
+  appointment_id?: string;
+  opd_token_id?:   string;
+  notes?:          string;
+}
+
+export async function collectPayment(input: CollectPaymentInput): Promise<ServiceResponse<object>> {
+  const { hospital_id, patient_id, amount, mode, collected_by, appointment_id, opd_token_id, notes } = input;
+
+  const collection = await HospitalCollection.create({
+    hospital_id,
+    patient_id:     patient_id     ?? null,
+    appointment_id: appointment_id ?? null,
+    opd_token_id:   opd_token_id   ?? null,
+    amount,
+    mode,
+    collected_by,
+    notes:          notes ?? null,
+  });
+
+  // Mark linked appointment as paid
+  if (appointment_id) {
+    await Appointment.update(
+      { payment_status: PaymentStatus.CAPTURED, payment_mode: PaymentMode.CASH },
+      { where: { id: appointment_id } },
+    );
+  }
+
+  logger.info('Payment collected', { collectionId: collection.id, amount, mode, hospital_id });
+  return ok({
+    collection_id: collection.id,
+    amount,
+    mode,
+    collected_at: collection.collected_at,
+    message: `Payment of ₹${amount} collected via ${mode}.`,
+  });
+}
+
+// ── Get Collections (daily summary) ──────────────────────────────────────────
+export async function getCollections(
+  hospitalId: string,
+  date:       string,
+  doctorId?:  string,
+): Promise<ServiceResponse<object>> {
+  const startOfDay = new Date(`${date}T00:00:00.000Z`);
+  const endOfDay   = new Date(`${date}T23:59:59.999Z`);
+
+  const whereClause: any = {
+    hospital_id:  hospitalId,
+    collected_at: { [Op.between]: [startOfDay, endOfDay] },
+  };
+
+  const collections = await HospitalCollection.findAll({
+    where: whereClause,
+    include: [
+      { model: User, as: 'patient',      attributes: ['id', 'mobile'] },
+      { model: User, as: 'collectedByUser', attributes: ['id', 'mobile'] },
+    ],
+    order: [['collected_at', 'DESC']],
+  });
+
+  // Breakdown by mode
+  const breakdown: Record<string, number> = {};
+  let total = 0;
+  for (const c of collections) {
+    breakdown[c.mode] = (breakdown[c.mode] ?? 0) + Number(c.amount);
+    total += Number(c.amount);
+  }
+
+  return ok({
+    date,
+    total,
+    breakdown,
+    count: collections.length,
+    collections: collections.map(c => ({
+      id:             c.id,
+      amount:         Number(c.amount),
+      mode:           c.mode,
+      collected_at:   c.collected_at,
+      patient:        (c as any).patient ?? null,
+      appointment_id: c.appointment_id,
+      opd_token_id:   c.opd_token_id,
+      notes:          c.notes,
+    })),
+  });
 }
