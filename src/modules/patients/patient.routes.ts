@@ -13,7 +13,7 @@ import {
 import { asyncHandler } from '../../utils/asyncHandler';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload } from '../../types';
-import { RecordType, Appointment, DoctorReview } from '../../models';
+import { RecordType, Appointment, DoctorReview, HospitalPatient, HospitalCollection, Hospital } from '../../models';
 import { env } from '../../config/env';
 import { z } from 'zod';
 
@@ -163,6 +163,51 @@ router.delete(
     const result   = await PatientService.deleteHealthRecord(user.sub, recordId);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
+  }),
+);
+
+// GET /patients/me/visits — hospital visit history with collection records
+router.get(
+  '/me/visits',
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+
+    const visits = await HospitalPatient.findAll({
+      where: { patient_id: user.sub },
+      include: [{ model: Hospital, as: 'hospital', attributes: ['id', 'name', 'city', 'address_line1'] }],
+      order: [['last_visit_at', 'DESC']],
+    });
+
+    const collections = await HospitalCollection.findAll({
+      where: { patient_id: user.sub },
+      order: [['collected_at', 'DESC']],
+      limit: 50,
+    });
+
+    const result = visits.map((v) => {
+      const hosp = (v as any).hospital;
+      const hospCollections = collections
+        .filter((c) => c.hospital_id === v.hospital_id)
+        .map((c) => ({
+          id:           c.id,
+          amount:       Number(c.amount),
+          mode:         c.mode,
+          collected_at: c.collected_at,
+          notes:        c.notes,
+        }));
+
+      return {
+        hospital_id:    v.hospital_id,
+        hospital_name:  hosp?.name ?? null,
+        hospital_city:  hosp?.city ?? null,
+        first_visit_at: v.first_visit_at,
+        last_visit_at:  v.last_visit_at,
+        total_visits:   v.total_visits,
+        collections:    hospCollections,
+      };
+    });
+
+    sendSuccess(res, { visits: result });
   }),
 );
 
