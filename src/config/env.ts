@@ -87,6 +87,11 @@ const envSchema = z.object({
 
   // Admin panel URL (used in invite emails)
   ADMIN_PANEL_URL: z.string().default('https://admin.upcharify.com'),
+
+  // Cloudinary — image uploads (doctor photos, hospital logos, patient photos)
+  CLOUDINARY_CLOUD_NAME: z.string().optional(),
+  CLOUDINARY_API_KEY:    z.string().optional(),
+  CLOUDINARY_API_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

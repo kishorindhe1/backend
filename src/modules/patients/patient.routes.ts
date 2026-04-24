@@ -5,7 +5,7 @@ import * as PatientService    from './patient.service';
 import { authenticate } from '../../middlewares/auth.middleware';
 import { validate } from '../../middlewares/validate.middleware';
 import { requireCompleteProfile } from '../../middlewares/profileGuard.middleware';
-import { uploadHealthRecordFile } from '../../middlewares/upload.middleware';
+import { uploadHealthRecordFile, uploadPatientPhoto, cloudinaryEnabled } from '../../middlewares/upload.middleware';
 import {
   CompleteProfileSchema,
   UpdateProfileSchema,
@@ -60,6 +60,30 @@ router.put(
   requireCompleteProfile,       // already-complete users updating their profile
   validate(UpdateProfileSchema),
   asyncHandler(PatientController.updateProfile),
+);
+
+// ── Profile photo ─────────────────────────────────────────────────────────────
+router.patch(
+  '/me/photo',
+  (req: Request, res: Response, next) => {
+    if (!cloudinaryEnabled) {
+      sendError(res, 503, { code: 'CLOUDINARY_NOT_CONFIGURED', message: 'Image upload is not configured on this server.' });
+      return;
+    }
+    uploadPatientPhoto(req, res, (err: unknown) => {
+      if (err) { sendError(res, 400, { code: 'UPLOAD_ERROR', message: (err as Error).message }); return; }
+      next();
+    });
+  },
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+    const file = req.file as (Express.Multer.File & { path?: string }) | undefined;
+    if (!file) { sendError(res, 400, { code: 'FILE_REQUIRED', message: 'No photo uploaded.' }); return; }
+
+    const photoUrl = (file as any).path ?? (file as any).secure_url ?? '';
+    await PatientService.updateProfilePhotoUrl(user.sub, photoUrl);
+    sendSuccess(res, { profile_photo_url: photoUrl });
+  }),
 );
 
 // ── Health Records ────────────────────────────────────────────────────────────

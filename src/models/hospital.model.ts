@@ -11,6 +11,7 @@ export enum AppointmentApprovalMode {
 
 export enum PaymentCollectionMode {
   ONLINE_ONLY    = 'online_only',
+  CASH_ONLY      = 'cash_only',
   PATIENT_CHOICE = 'patient_choice',
 }
 
@@ -66,6 +67,9 @@ export class Hospital extends Model<
   declare latitude:          number | null;
   declare longitude:         number | null;
 
+  // Media
+  declare logo_url: string | null;
+
   // Appointment settings
   declare appointment_approval:      CreationOptional<AppointmentApprovalMode>;
   declare payment_collection_mode:   CreationOptional<PaymentCollectionMode>;
@@ -109,6 +113,8 @@ Hospital.init(
     pincode:       { type: DataTypes.STRING(10),  allowNull: true },
     latitude:      { type: DataTypes.DECIMAL(10, 8), allowNull: true },
     longitude:     { type: DataTypes.DECIMAL(11, 8), allowNull: true },
+
+    logo_url: { type: DataTypes.STRING(500), allowNull: true },
 
     appointment_approval: {
       type: DataTypes.ENUM(...Object.values(AppointmentApprovalMode)),

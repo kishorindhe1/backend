@@ -32,9 +32,6 @@ export async function getQueueStatus(
   appointmentId: string,
   patientId:     string,
 ): Promise<ServiceResponse<QueueStateResult>> {
-  const cached = await redis.get(`queue:status:${appointmentId}`);
-  if (cached) return ok(JSON.parse(cached) as QueueStateResult);
-
   const entry = await ConsultationQueue.findOne({
     where: { appointment_id: appointmentId },
     include: [{ model: Appointment, as: 'appointment' }],
@@ -44,8 +41,12 @@ export async function getQueueStatus(
   const appt = (entry as unknown as { appointment: Appointment }).appointment;
   if (appt.patient_id !== patientId) return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.', 403);
 
+  const cacheKey = `queue:status:${entry.doctor_id}:${entry.queue_date}:${appointmentId}`;
+  const cached = await redis.get(cacheKey);
+  if (cached) return ok(JSON.parse(cached) as QueueStateResult);
+
   const result = await computeQueueState(entry, appt);
-  await redis.setex(`queue:status:${appointmentId}`, 20, JSON.stringify(result));
+  await redis.setex(cacheKey, 20, JSON.stringify(result));
   return ok(result);
 }
 
@@ -283,6 +284,11 @@ export async function addToQueue(
 
 export async function invalidateQueueCache(doctorId: string, date: string): Promise<void> {
   await redis.del(RedisKeys.availableSlots(doctorId, date));
-  const keys = await redis.keys('queue:status:*');
-  if (keys.length) await redis.del(...keys);
+  // SCAN is non-blocking; KEYS would block Redis during a full keyspace scan
+  let cursor = '0';
+  do {
+    const [next, keys] = await redis.scan(cursor, 'MATCH', `queue:status:${doctorId}:${date}:*`, 'COUNT', 100);
+    cursor = next;
+    if (keys.length) await redis.del(...keys);
+  } while (cursor !== '0');
 }

@@ -7,7 +7,8 @@ import { JwtAccessPayload, UserRole } from '../../types';
 import { asyncHandler }              from '../../utils/asyncHandler';
 import { z }                         from 'zod';
 import { OnboardingStatus, AppointmentApprovalMode, PaymentCollectionMode } from '../../models';
-import { DoctorSearchIndex } from '../../models';
+import { DoctorSearchIndex, Hospital } from '../../models';
+import { uploadHospitalLogo, cloudinaryEnabled } from '../../middlewares/upload.middleware';
 
 // ── Safe extractors ───────────────────────────────────────────────────────────
 const param = (req: Request, key: string): string =>
@@ -148,6 +149,31 @@ router.post('/:id/receptionists',
   authenticate, requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
   validate(AddReceptionistSchema),
   asyncHandler(addReceptionist),
+);
+
+router.patch('/:id/logo',
+  authenticate, requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  (req: Request, res: Response, next) => {
+    if (!cloudinaryEnabled) {
+      sendError(res, 503, { code: 'CLOUDINARY_NOT_CONFIGURED', message: 'Image upload is not configured on this server.' });
+      return;
+    }
+    uploadHospitalLogo(req, res, (err: unknown) => {
+      if (err) { sendError(res, 400, { code: 'UPLOAD_ERROR', message: (err as Error).message }); return; }
+      next();
+    });
+  },
+  asyncHandler(async (req: Request, res: Response) => {
+    const file = req.file as (Express.Multer.File & { path?: string }) | undefined;
+    if (!file) { sendError(res, 400, { code: 'FILE_REQUIRED', message: 'No logo uploaded.' }); return; }
+
+    const logoUrl = (file as any).path ?? (file as any).secure_url ?? '';
+    const hospital = await Hospital.findByPk(param(req, 'id'));
+    if (!hospital) { sendError(res, 404, { code: 'NOT_FOUND', message: 'Hospital not found.' }); return; }
+
+    await hospital.update({ logo_url: logoUrl });
+    sendSuccess(res, { logo_url: logoUrl });
+  }),
 );
 
 router.patch('/:id/payment-collection-mode',

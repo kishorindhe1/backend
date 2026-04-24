@@ -11,7 +11,7 @@ import {
   GeneratedSlot, SlotStatus,
   OpdSlotSession, OpdSlotStatus,
   OpdSession, OpdSessionStatus,
-  OpdToken, OpdTokenType,
+  OpdToken, OpdTokenType, OpdTokenStatus,
   WalkInToken, WalkInTokenStatus,
   HospitalPatient,
   HospitalCollection, CollectionMode,
@@ -206,7 +206,9 @@ export async function reportDoctorDelay(
   const estimatedTime = new Date(Date.now() + delayMinutes * 60_000)
     .toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-  // Notify all waiting patients about the delay
+  const delayPayload = { name: 'Patient', doctor: lateDoc?.full_name ?? 'Doctor', delay: delayMinutes, estimatedTime };
+
+  // Notify appointment-based queue patients
   const waitingEntries = await ConsultationQueue.findAll({
     where: { doctor_id: doctorId, queue_date: date, status: QueueStatus.WAITING },
     attributes: ['patient_id', 'appointment_id'],
@@ -215,9 +217,35 @@ export async function reportDoctorDelay(
     await enqueueNotification({
       userId: entry.patient_id, appointmentId: entry.appointment_id,
       type: 'doctor_late', channels: [NotificationChannel.SMS, NotificationChannel.PUSH], priority: 'high',
-      data: { name: 'Patient', doctor: lateDoc?.full_name ?? 'Doctor', delay: delayMinutes, estimatedTime },
+      data: delayPayload,
     });
   }
+
+  // Also notify OPD token session holders who haven't been seen yet
+  const activeSession = await OpdSession.findOne({
+    where: {
+      doctor_id: doctorId, hospital_id: hospitalId, session_date: date,
+      status: { [Op.in]: [OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE] },
+    },
+  });
+  if (activeSession) {
+    const tokenHolders = await OpdToken.findAll({
+      where: {
+        session_id: activeSession.id,
+        patient_id: { [Op.ne]: null },
+        status: { [Op.in]: [OpdTokenStatus.ISSUED, OpdTokenStatus.ARRIVED, OpdTokenStatus.WAITING] },
+      },
+      attributes: ['patient_id'],
+    });
+    for (const token of tokenHolders) {
+      await enqueueNotification({
+        userId: token.patient_id!, type: 'doctor_late',
+        channels: [NotificationChannel.SMS, NotificationChannel.PUSH], priority: 'high',
+        data: delayPayload,
+      });
+    }
+  }
+
   await event.update({ patients_notified: true });
 
   logger.info('Doctor delay reported', { doctorId, delayMinutes, affectedCount });

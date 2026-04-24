@@ -79,7 +79,7 @@ export async function issueOnlineToken(
       status:             OpdTokenStatus.ISSUED,
     });
 
-    const estimatedWait = calculateEstimatedWait(session, tokenNumber);
+    const estimatedWait = await calculateEstimatedWait(session, tokenNumber);
 
     logger.info('OPD token issued', { sessionId, tokenNumber, patientId });
     return ok({ token_number: tokenNumber, estimated_wait_minutes: estimatedWait, session_id: sessionId });
@@ -137,11 +137,14 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
   if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
   if (session.status !== OpdSessionStatus.ACTIVE) throw ErrorFactory.unprocessable('SESSION_NOT_ACTIVE', 'Session is not active.');
 
-  // Complete current in-progress token
-  await OpdToken.update(
-    { status: OpdTokenStatus.COMPLETED, consultation_end: new Date() },
-    { where: { session_id: sessionId, status: OpdTokenStatus.IN_PROGRESS } },
-  );
+  // Complete current in-progress token and capture it for avg calculation
+  const completing = await OpdToken.findOne({
+    where: { session_id: sessionId, status: OpdTokenStatus.IN_PROGRESS },
+  });
+  if (completing) {
+    await completing.update({ status: OpdTokenStatus.COMPLETED, consultation_end: new Date() });
+    await updateSessionAvg(session, completing);
+  }
 
   // Find next
   const next = await OpdToken.findOne({
@@ -156,7 +159,6 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
 
   await next.update({ status: OpdTokenStatus.CALLED, called_at: new Date() });
   await session.update({ current_token: next.token_number });
-  await updateSessionAvg(session, next);
 
   return ok({ message: `Token #${next.token_number} called.`, token_number: next.token_number, patient_id: next.patient_id });
 }
@@ -256,20 +258,41 @@ export async function getSessionStats(sessionId: string): Promise<ServiceRespons
     tokens_skipped:   tokens.filter(t => t.status === OpdTokenStatus.SKIPPED).length,
     tokens_no_show:   tokens.filter(t => t.status === OpdTokenStatus.NO_SHOW).length,
     avg_time_per_patient: session.avg_time_per_patient,
-    estimated_end_time: calculateEstimatedEnd(session),
+    estimated_end_time: await calculateEstimatedEnd(session),
   };
 
   return ok(stats);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function calculateEstimatedWait(session: OpdSession, tokenNumber: number): number {
-  const tokensAhead = tokenNumber - session.current_token - 1;
-  return Math.max(0, tokensAhead * Number(session.avg_time_per_patient));
+
+// Count tokens that have not yet been seen (excludes completed/skipped/no_show/cancelled)
+const PENDING_STATUSES = [
+  OpdTokenStatus.ISSUED,
+  OpdTokenStatus.ARRIVED,
+  OpdTokenStatus.WAITING,
+  OpdTokenStatus.CALLED,
+  OpdTokenStatus.IN_PROGRESS,
+];
+
+async function calculateEstimatedWait(session: OpdSession, tokenNumber: number): Promise<number> {
+  const ahead = await OpdToken.count({
+    where: {
+      session_id:   session.id,
+      token_number: { [Op.lt]: tokenNumber },
+      status:       { [Op.in]: PENDING_STATUSES },
+    },
+  });
+  return Math.max(0, ahead * Number(session.avg_time_per_patient));
 }
 
-function calculateEstimatedEnd(session: OpdSession): string {
-  const remaining   = session.total_tokens - session.current_token;
+async function calculateEstimatedEnd(session: OpdSession): Promise<string> {
+  const remaining = await OpdToken.count({
+    where: {
+      session_id: session.id,
+      status:     { [Op.in]: PENDING_STATUSES },
+    },
+  });
   const minutesLeft = remaining * Number(session.avg_time_per_patient);
   const endTime     = new Date(Date.now() + minutesLeft * 60_000);
   return endTime.toTimeString().slice(0, 5);

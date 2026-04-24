@@ -122,3 +122,10 @@ export async function updateProfile(userId: string, input: UpdateProfileInput): 
   logger.info('Patient profile updated', { userId });
   return ok({ profile_status: profile.profile_status, completion_percentage: getCompletionPercentage(profile), missing_fields: getMissingFields(profile) });
 }
+
+export async function updateProfilePhotoUrl(userId: string, photoUrl: string): Promise<ServiceResponse<object>> {
+  const profile = await PatientProfile.findOne({ where: { user_id: userId } });
+  if (!profile) return fail('PROFILE_NOT_FOUND', 'Profile not found.', 404);
+  await profile.update({ profile_photo_url: photoUrl });
+  return ok({ profile_photo_url: photoUrl });
+}
