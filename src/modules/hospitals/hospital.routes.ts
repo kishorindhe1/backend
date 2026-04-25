@@ -7,7 +7,7 @@ import { JwtAccessPayload, UserRole } from '../../types';
 import { asyncHandler }              from '../../utils/asyncHandler';
 import { z }                         from 'zod';
 import { OnboardingStatus, AppointmentApprovalMode, PaymentCollectionMode } from '../../models';
-import { DoctorSearchIndex, Hospital } from '../../models';
+import { DoctorSearchIndex, Hospital, DoctorProfile } from '../../models';
 import { uploadHospitalLogo, cloudinaryEnabled } from '../../middlewares/upload.middleware';
 
 // ── Safe extractors ───────────────────────────────────────────────────────────
@@ -111,6 +111,12 @@ router.get('/:id/doctors', asyncHandler(async (req: Request, res: Response) => {
     offset: (page - 1) * perPage,
   });
 
+  const doctorIds = rows.map(d => d.doctor_id);
+  const photoProfiles = doctorIds.length > 0
+    ? await DoctorProfile.findAll({ where: { id: doctorIds }, attributes: ['id', 'profile_photo_url'] })
+    : [];
+  const photoMap = new Map(photoProfiles.map(p => [p.id, p.profile_photo_url]));
+
   const data = rows.map((d) => ({
     doctor_id:        d.doctor_id,
     name:             d.doctor_name,
@@ -118,6 +124,7 @@ router.get('/:id/doctors', asyncHandler(async (req: Request, res: Response) => {
     qualifications:   d.qualifications,
     experience_years: d.experience_years,
     consultation_fee: Number(d.consultation_fee),
+    profile_photo_url: photoMap.get(d.doctor_id) ?? null,
     ratings: { avg: Number(d.avg_rating), count: d.total_reviews },
     availability: { available_today: d.available_today, next_slot: d.next_available_slot },
     reliability: { score: Number(d.reliability_score) },

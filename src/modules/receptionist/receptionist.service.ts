@@ -18,7 +18,7 @@ import {
   User,
 }                                     from '../../models';
 import { NotificationChannel } from '../../models';
-import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
+import { UserRole, AccountStatus, ProfileStatus, ServiceResponse, ok, fail } from '../../types';
 import { ErrorFactory }               from '../../utils/errors';
 import { enqueueNotification } from '../notifications/notification.service';
 import { invalidateQueueCache }       from '../queue/queue.service';
@@ -575,6 +575,10 @@ export async function quickRegister(input: QuickRegisterInput): Promise<ServiceR
       dob.setFullYear(dob.getFullYear() - age);
     }
 
+    // Mark complete only when all three required fields are present
+    const isComplete = !!full_name && !!dob && !!gender;
+    const newProfileStatus = isComplete ? ProfileStatus.COMPLETE : ProfileStatus.INCOMPLETE;
+
     await PatientProfile.create({
       user_id:       user.id,
       full_name,
@@ -583,7 +587,8 @@ export async function quickRegister(input: QuickRegisterInput): Promise<ServiceR
       email:         null,
       blood_group:   null,
       profile_photo_url: null,
-      completed_at:  null,
+      profile_status: newProfileStatus,
+      completed_at:  isComplete ? new Date() : null,
     } as any, { transaction: t });
 
     await HospitalPatient.create({

@@ -408,7 +408,7 @@ export async function rescheduleAppointment(
 export async function getAppointment(appointmentId: string, requesterId: string): Promise<ServiceResponse<object>> {
   const appointment = await Appointment.findByPk(appointmentId, {
     include: [
-      { model: DoctorProfile, as: 'doctor', attributes: ['id', 'full_name', 'specialization'] },
+      { model: DoctorProfile, as: 'doctor', attributes: ['id', 'full_name', 'specialization', 'profile_photo_url'] },
       { model: Hospital,      as: 'hospital', attributes: ['id', 'name'] },
       { model: GeneratedSlot, as: 'slot',     attributes: ['slot_datetime'] },
       { model: OpdToken,      as: 'opdToken', attributes: ['token_number'] },
@@ -424,7 +424,7 @@ export async function getPatientAppointments(patientId: string, page = 1, perPag
   const { rows, count } = await Appointment.findAndCountAll({
     where:   { patient_id: patientId },
     include: [
-      { model: DoctorProfile, as: 'doctor',   attributes: ['full_name', 'specialization'] },
+      { model: DoctorProfile, as: 'doctor',   attributes: ['full_name', 'specialization', 'profile_photo_url'] },
       { model: Hospital,      as: 'hospital', attributes: ['name'] },
     ],
     order:   [['scheduled_at', 'DESC']],

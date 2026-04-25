@@ -443,6 +443,13 @@ export async function searchDoctors(filters: SearchFilters): Promise<ServiceResp
     offset: (page - 1) * per_page,
   });
 
+  // Batch-fetch profile photos from DoctorProfile (search index doesn't store them)
+  const doctorIds = rows.map(r => r.doctor_id);
+  const photoProfiles = doctorIds.length > 0
+    ? await DoctorProfile.findAll({ where: { id: doctorIds }, attributes: ['id', 'profile_photo_url'] })
+    : [];
+  const photoMap = new Map(photoProfiles.map(p => [p.id, p.profile_photo_url]));
+
   // Build results with distance if lat/lng provided
   const results: SearchResult[] = rows.map(entry => {
     let distanceKm: number | undefined;
@@ -467,7 +474,7 @@ export async function searchDoctors(filters: SearchFilters): Promise<ServiceResp
       doctor_id:        entry.doctor_id,
       hospital_id:      entry.hospital_id,
       name:             entry.doctor_name,
-      profile_photo_url: null, // No photo stored — app renders initials-based avatar
+      profile_photo_url: photoMap.get(entry.doctor_id) ?? null,
       specialization:   entry.specialization,
       qualifications:   entry.qualifications,
       experience_years: entry.experience_years,
