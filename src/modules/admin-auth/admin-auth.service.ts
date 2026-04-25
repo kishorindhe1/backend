@@ -217,6 +217,84 @@ export async function acceptHospitalInvite(
   return ok({ tokens, user: { id: user.id, email, role: user.role } });
 }
 
+// ─── Forgot / Reset password ──────────────────────────────────────────────────
+
+const RESET_EXPIRY_MINUTES = 15;
+
+export async function forgotPassword(email: string): Promise<ServiceResponse<{ masked_email: string }>> {
+  const user = await User.findOne({ where: { email } });
+
+  // Always respond OK to prevent email enumeration
+  if (!user || !ADMIN_ROLES.includes(user.role) || user.account_status === AccountStatus.SUSPENDED) {
+    return ok({ masked_email: maskEmail(email) });
+  }
+
+  const cooldownKey = `admin:pw-reset:cooldown:${email}`;
+  const cooldownTTL = await redis.ttl(cooldownKey);
+  if (cooldownTTL > 0) {
+    return fail('RATE_LIMIT_EXCEEDED', 'A reset code was already sent. Please wait before requesting again.', 429, { retry_after: cooldownTTL });
+  }
+
+  const otp       = generateOTP();
+  const otpHash   = await hashOTP(otp);
+  const expiresAt = addMinutes(new Date(), RESET_EXPIRY_MINUTES);
+
+  await user.update({ otp_secret: otpHash, otp_expires_at: expiresAt, otp_attempts: 0 });
+  await redis.setex(cooldownKey, RedisTTL.OTP_COOLDOWN, '1');
+
+  const htmlBody = `
+    <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+      <h2 style="color:#6366f1;margin-bottom:8px">Password Reset</h2>
+      <p style="color:#475569;margin-bottom:24px">Use the code below to reset your Upcharify admin password. It expires in <strong>${RESET_EXPIRY_MINUTES} minutes</strong>.</p>
+      <div style="background:#f1f5f9;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px">
+        <span style="font-size:36px;font-weight:900;letter-spacing:8px;color:#0f172a">${otp}</span>
+      </div>
+      <p style="color:#94a3b8;font-size:13px">If you did not request a password reset, you can safely ignore this email.</p>
+    </div>`;
+
+  await sendEmail(email, 'Upcharify Admin — Password Reset Code',
+    `Your password reset code is: ${otp}\n\nExpires in ${RESET_EXPIRY_MINUTES} minutes. If you did not request this, ignore this email.`,
+    htmlBody,
+  );
+
+  logger.info('Admin password reset code sent', { email: maskEmail(email) });
+  return ok({ masked_email: maskEmail(email) });
+}
+
+export async function resetPassword(email: string, token: string, newPassword: string): Promise<ServiceResponse<{ message: string }>> {
+  const user = await User.findOne({ where: { email } });
+
+  if (!user || !ADMIN_ROLES.includes(user.role)) {
+    return fail('RESET_INVALID', 'Invalid or expired reset code.', 400);
+  }
+
+  if (!user.otp_secret || !user.otp_expires_at) {
+    return fail('RESET_INVALID', 'No reset code found. Please request a new one.', 400);
+  }
+
+  if (user.otp_expires_at < new Date()) {
+    await user.update({ otp_secret: null, otp_expires_at: null });
+    return fail('RESET_EXPIRED', 'Reset code has expired. Please request a new one.', 400);
+  }
+
+  const isValid = await verifyOTP(token, user.otp_secret);
+  if (!isValid) {
+    const newAttempts = user.otp_attempts + 1;
+    await user.update({ otp_attempts: newAttempts });
+    if (newAttempts >= env.OTP_MAX_ATTEMPTS) {
+      await user.update({ otp_secret: null, otp_expires_at: null, otp_attempts: 0 });
+      return fail('RESET_INVALID', 'Too many failed attempts. Please request a new reset code.', 400);
+    }
+    return fail('RESET_INVALID', 'Invalid reset code. Please try again.', 400);
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  await user.update({ password_hash: passwordHash, otp_secret: null, otp_expires_at: null, otp_attempts: 0 });
+
+  logger.info('Admin password reset', { userId: user.id, email: maskEmail(email) });
+  return ok({ message: 'Password reset successfully. You can now sign in with your new password.' });
+}
+
 // ─── admin account setup (for seeding / super admin bootstrap) ─────────────
 
 export async function setAdminPassword(userId: string, password: string): Promise<void> {

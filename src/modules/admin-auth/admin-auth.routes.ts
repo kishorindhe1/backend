@@ -71,4 +71,46 @@ router.post('/accept-invite', authRateLimiter, validate(AcceptInviteSchema), asy
   res.json({ success: true, data: result.data });
 }));
 
+const ForgotPasswordSchema = z.object({
+  body: z.object({
+    email: z.string().email('Invalid email address'),
+  }),
+});
+
+const ResetPasswordSchema = z.object({
+  body: z.object({
+    email:        z.string().email(),
+    token:        z.string().length(6).regex(/^\d{6}$/),
+    new_password: z.string().min(8, 'Password must be at least 8 characters'),
+  }),
+});
+
+/**
+ * POST /admin/auth/forgot-password
+ * Send a password-reset code to the admin's email
+ */
+router.post('/forgot-password', authRateLimiter, validate(ForgotPasswordSchema), asyncHandler(async (req, res) => {
+  const { email } = req.body as { email: string };
+  const result = await AdminAuthService.forgotPassword(email);
+  if (!result.success) {
+    res.status(result.statusCode).json({ success: false, error: { code: result.code, message: result.message } });
+    return;
+  }
+  res.json({ success: true, data: result.data });
+}));
+
+/**
+ * POST /admin/auth/reset-password
+ * Verify the reset code and set a new password
+ */
+router.post('/reset-password', authRateLimiter, validate(ResetPasswordSchema), asyncHandler(async (req, res) => {
+  const { email, token, new_password } = req.body as { email: string; token: string; new_password: string };
+  const result = await AdminAuthService.resetPassword(email, token, new_password);
+  if (!result.success) {
+    res.status(result.statusCode).json({ success: false, error: { code: result.code, message: result.message } });
+    return;
+  }
+  res.json({ success: true, data: result.data });
+}));
+
 export default router;
