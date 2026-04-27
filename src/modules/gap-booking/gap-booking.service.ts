@@ -10,11 +10,16 @@ import {
   DoctorHospitalAffiliation,
   Hospital, AppointmentApprovalMode, PaymentCollectionMode,
   DayOfWeek,
+  DoctorBookingPreference,
+  DoctorProfile,
+  NotificationChannel,
 }                                         from '../../models';
 import { redis, RedisKeys, RedisTTL }     from '../../config/redis';
 import { ServiceResponse, ok, fail }      from '../../types';
 import { ErrorFactory }                   from '../../utils/errors';
 import { addToQueue }                     from '../queue/queue.service';
+import { enqueueNotification }            from '../notifications/notification.service';
+import { incrementCounter }               from '../admin/admin.service';
 import { logger }                         from '../../utils/logger';
 
 // ── Day-of-week helper ────────────────────────────────────────────────────────
@@ -209,14 +214,15 @@ export async function findAvailableGaps(
 // ── Book a gap ────────────────────────────────────────────────────────────────
 
 export interface BookGapInput {
-  patient_id:       string;
-  doctor_id:        string;
-  hospital_id:      string;
-  date:             string;
+  patient_id:        string;
+  doctor_id:         string;
+  hospital_id:       string;
+  date:              string;
   procedure_type_id: string;
-  start_time:       string;   // HH:MM — chosen gap
-  notes?:           string;
-  payment_mode?:    PaymentMode;
+  start_time:        string;   // HH:MM — chosen gap
+  notes?:            string;
+  payment_mode?:     PaymentMode;
+  appointment_type?: AppointmentType;
 }
 
 export async function bookGap(input: BookGapInput): Promise<ServiceResponse<object>> {
@@ -230,6 +236,92 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
 
   const totalDuration = pt.duration_minutes + pt.prep_time_minutes + pt.cleanup_time_minutes;
   const endTime       = toHHMM(toMinutes(start_time) + totalDuration);
+  const scheduledAt   = new Date(`${date}T${start_time}:00`);
+
+  // ── Validate start_time is within an active availability window ──────────────
+  const targetDate = new Date(`${date}T00:00:00`);
+  const dayEnum    = JS_DAY_TO_ENUM[targetDate.getDay()];
+
+  const validWindows = await DoctorAvailabilityWindow.findAll({
+    where: {
+      doctor_id, hospital_id,
+      day_of_week:  dayEnum,
+      booking_mode: WindowBookingMode.GAP_BASED,
+      is_active:    true,
+      effective_from: { [Op.lte]: targetDate },
+      [Op.or]: [{ effective_until: null }, { effective_until: { [Op.gte]: targetDate } }],
+    },
+  });
+  if (!validWindows.length) {
+    throw ErrorFactory.unprocessable('NO_AVAILABILITY', 'Doctor has no gap-based availability on this day.');
+  }
+
+  const overrides  = await DoctorAvailabilityOverride.findAll({ where: { doctor_id, hospital_id, date } });
+  const isDayOff   = overrides.some((o) => o.override_type === OverrideType.DAY_OFF);
+  if (isDayOff) throw ErrorFactory.unprocessable('DAY_OFF', 'Doctor is not available on this date.');
+
+  const startMins = toMinutes(start_time);
+  const endMins   = startMins + totalDuration;
+
+  const inBreak = overrides
+    .filter((o) => o.override_type === OverrideType.BREAK && o.start_time && o.end_time)
+    .some((o) => startMins < toMinutes(o.end_time!) && endMins > toMinutes(o.start_time!));
+  if (inBreak) throw ErrorFactory.unprocessable('BREAK_CONFLICT', 'This time falls within a scheduled break.');
+
+  const fitsInWindow = validWindows.some((win) => {
+    let winStart = toMinutes(win.window_start);
+    let winEnd   = toMinutes(win.window_end);
+    for (const o of overrides) {
+      if (o.override_type === OverrideType.LATE_START && o.start_time) winStart = Math.max(winStart, toMinutes(o.start_time));
+      if (o.override_type === OverrideType.EARLY_END  && o.end_time)   winEnd   = Math.min(winEnd,   toMinutes(o.end_time));
+    }
+    return startMins >= winStart && endMins <= winEnd;
+  });
+  if (!fitsInWindow) throw ErrorFactory.unprocessable('OUTSIDE_WINDOW', 'Chosen time is outside the doctor\'s availability window.');
+
+  // ── Doctor booking preference checks ────────────────────────────────────────
+  const pref = await DoctorBookingPreference.findOne({ where: { doctor_id, hospital_id } });
+  if (pref) {
+    const now      = new Date();
+    const slotTime = scheduledAt.getTime();
+
+    if (pref.min_booking_lead_hours > 0 && slotTime - now.getTime() < pref.min_booking_lead_hours * 3_600_000) {
+      throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
+    }
+    if (pref.booking_cutoff_hours > 0 && slotTime - now.getTime() < pref.booking_cutoff_hours * 3_600_000) {
+      throw ErrorFactory.unprocessable('BOOKING_PAST_CUTOFF', `Bookings for this doctor close ${pref.booking_cutoff_hours}h before the slot.`);
+    }
+
+    const activeStatuses = [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL];
+
+    if (pref.max_new_patients_per_day != null && input.appointment_type !== AppointmentType.FOLLOW_UP) {
+      const count = await Appointment.count({
+        where: {
+          doctor_id, hospital_id,
+          appointment_type: { [Op.ne]: AppointmentType.FOLLOW_UP },
+          status:           { [Op.in]: activeStatuses },
+          scheduled_at:     { [Op.between]: [new Date(`${date}T00:00:00`), new Date(`${date}T23:59:59`)] },
+        },
+      });
+      if (count >= pref.max_new_patients_per_day) {
+        throw ErrorFactory.conflict('DAILY_NEW_PATIENT_LIMIT', 'Daily new patient limit reached for this doctor.');
+      }
+    }
+
+    if (pref.max_followups_per_day != null && input.appointment_type === AppointmentType.FOLLOW_UP) {
+      const count = await Appointment.count({
+        where: {
+          doctor_id, hospital_id,
+          appointment_type: AppointmentType.FOLLOW_UP,
+          status:           { [Op.in]: activeStatuses },
+          scheduled_at:     { [Op.between]: [new Date(`${date}T00:00:00`), new Date(`${date}T23:59:59`)] },
+        },
+      });
+      if (count >= pref.max_followups_per_day) {
+        throw ErrorFactory.conflict('DAILY_FOLLOWUP_LIMIT', 'Daily follow-up limit reached for this doctor.');
+      }
+    }
+  }
 
   // Distributed lock on this time slot
   const lockKey = `lock:gap:${doctor_id}:${date}:${start_time}`;
@@ -243,11 +335,8 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
       // Check no overlap
       const conflict = await OpdSlotSession.findOne({
         where: {
-          doctor_id,
-          hospital_id,
-          date,
-          status: { [Op.in]: [OpdSlotStatus.BOOKED, OpdSlotStatus.RESERVED_EMERGENCY] },
-          // any existing slot that overlaps [start_time, endTime)
+          doctor_id, hospital_id, date,
+          status:          { [Op.in]: [OpdSlotStatus.BOOKED, OpdSlotStatus.RESERVED_EMERGENCY] },
           slot_start_time: { [Op.lt]: endTime },
           slot_end_time:   { [Op.gt]: start_time },
         },
@@ -262,10 +351,18 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
       });
       if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
 
-      const isAutoApproval    = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
-      const isPatientChoice   = hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE;
-      const resolvedPayMode   = isPatientChoice && input.payment_mode ? input.payment_mode : PaymentMode.ONLINE_PREPAID;
-      const isCashOrCard      = resolvedPayMode === PaymentMode.CASH || resolvedPayMode === PaymentMode.CARD;
+      const isAutoApproval  = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
+      const doctorRequiresApproval = pref?.requires_booking_approval === true;
+
+      let resolvedPayMode: PaymentMode;
+      if (hospital.payment_collection_mode === PaymentCollectionMode.CASH_ONLY) {
+        resolvedPayMode = PaymentMode.CASH;
+      } else if (hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE && input.payment_mode) {
+        resolvedPayMode = input.payment_mode;
+      } else {
+        resolvedPayMode = PaymentMode.ONLINE_PREPAID;
+      }
+      const isCashOrCard = resolvedPayMode === PaymentMode.CASH || resolvedPayMode === PaymentMode.CARD;
 
       const affiliation = await DoctorHospitalAffiliation.findOne({
         where: { doctor_id, hospital_id, is_active: true },
@@ -274,25 +371,21 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
       if (!affiliation) throw ErrorFactory.unprocessable('DOCTOR_NOT_AFFILIATED', 'Doctor not affiliated with this hospital.');
 
       const fee    = Number(affiliation.consultation_fee);
-      const pfee   = Math.round(fee * (0.02) * 100) / 100;
+      const pfee   = Math.round(fee * 0.02 * 100) / 100;
       const payout = fee - pfee;
 
       let initialStatus: AppointmentStatus;
-      if (!isAutoApproval)      initialStatus = AppointmentStatus.AWAITING_HOSPITAL_APPROVAL;
-      else if (isCashOrCard)    initialStatus = AppointmentStatus.CONFIRMED;
-      else                      initialStatus = AppointmentStatus.PENDING;
+      if (!isAutoApproval || doctorRequiresApproval) initialStatus = AppointmentStatus.AWAITING_HOSPITAL_APPROVAL;
+      else if (isCashOrCard)                         initialStatus = AppointmentStatus.CONFIRMED;
+      else                                           initialStatus = AppointmentStatus.PENDING;
 
-      // Build scheduled_at from date + start_time
-      const scheduledAt = new Date(`${date}T${start_time}:00`);
-
-      // Create appointment
       const appointment = await Appointment.create({
         patient_id, doctor_id, hospital_id,
-        slot_id:          null,   // gap-based appointments have no generated_slot row
+        slot_id:          null,
         scheduled_at:     scheduledAt,
         status:           initialStatus,
         payment_status:   PaymentStatus.PENDING,
-        appointment_type: AppointmentType.ONLINE_BOOKING,
+        appointment_type: input.appointment_type ?? AppointmentType.ONLINE_BOOKING,
         payment_mode:     resolvedPayMode,
         consultation_fee: fee,
         platform_fee:     pfee,
@@ -304,7 +397,6 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
         razorpay_order_id: null,
       }, { transaction: t });
 
-      // Create OpdSlotSession (BOOKED immediately — no draft phase for gap-based)
       const session = await OpdSlotSession.create({
         doctor_id, hospital_id,
         schedule_id:      null,
@@ -323,7 +415,7 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
         published_at:     new Date(),
       }, { transaction: t });
 
-      return { appointment, session };
+      return { appointment, session, isAutoApproval, doctorRequiresApproval };
     });
 
     // Invalidate caches
@@ -331,9 +423,29 @@ export async function bookGap(input: BookGapInput): Promise<ServiceResponse<obje
     await redis.del(RedisKeys.publishedSlots(doctor_id, date));
 
     // Add to consultation queue
-    const scheduledAt = new Date(`${date}T${start_time}:00`);
     await addToQueue(result.appointment.id, doctor_id, hospital_id, patient_id, scheduledAt);
 
+    // Notify patient
+    const doctor = await DoctorProfile.findByPk(doctor_id, { attributes: ['full_name'] });
+    const notifyType = (result.isAutoApproval && !result.doctorRequiresApproval)
+      ? 'booking_confirmed'
+      : 'booking_awaiting_approval';
+    await enqueueNotification({
+      userId:        patient_id,
+      appointmentId: result.appointment.id,
+      type:          notifyType,
+      channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+      priority:      'high',
+      data: {
+        name:   'Patient',
+        doctor: doctor?.full_name ?? 'Doctor',
+        date:   scheduledAt.toDateString(),
+        time:   start_time,
+        token:  '—',
+      },
+    });
+
+    await incrementCounter('bookings');
     logger.info('Gap booked', { appointmentId: result.appointment.id, doctorId: doctor_id, date, startTime: start_time, procedureTypeId: procedure_type_id });
 
     return ok({

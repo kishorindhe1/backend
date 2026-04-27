@@ -10,13 +10,14 @@ import {
   Hospital, AppointmentApprovalMode, PaymentCollectionMode,
   OpdToken,
   DoctorBookingPreference,
+  ConsultationQueue, QueueStatus,
 }                                         from '../../models';
 import { env }                           from '../../config/env';
 import { ErrorFactory }                  from '../../utils/errors';
 import { ServiceResponse, ok, fail }     from '../../types';
 import { logger }                        from '../../utils/logger';
 import { incrementCounter } from '../admin/admin.service';
-import { addToQueue }                    from '../queue/queue.service';
+import { addToQueue, invalidateQueueCache } from '../queue/queue.service';
 import { enqueueNotification }           from '../notifications/notification.service';
 import { NotificationChannel }           from '../../models';
 
@@ -80,64 +81,44 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     // ── Doctor booking preference checks ──────────────────────────────────────
     const pref = await DoctorBookingPreference.findOne({ where: { doctor_id, hospital_id } });
     if (pref) {
-      const now = new Date();
+      // Single slot fetch reused across all preference checks
+      const prefSlot = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
+      if (prefSlot) {
+        const now      = new Date();
+        const slotTime = prefSlot.slot_datetime.getTime();
+        const dateStr  = prefSlot.slot_datetime.toISOString().split('T')[0];
+        const Op       = (await import('sequelize')).Op;
+        const activeStatuses = [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL];
 
-      // min_booking_lead_hours — slot must be at least N hours in the future
-      if (pref.min_booking_lead_hours > 0) {
-        const slot = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
-        if (slot) {
-          const leadMs = pref.min_booking_lead_hours * 60 * 60 * 1000;
-          if (slot.slot_datetime.getTime() - now.getTime() < leadMs) {
-            throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
-          }
+        if (pref.min_booking_lead_hours > 0 && slotTime - now.getTime() < pref.min_booking_lead_hours * 3_600_000) {
+          throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
         }
-      }
 
-      // booking_cutoff_hours — no bookings within N hours of slot time
-      if (pref.booking_cutoff_hours > 0) {
-        const slot = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
-        if (slot) {
-          const cutoffMs = pref.booking_cutoff_hours * 60 * 60 * 1000;
-          if (slot.slot_datetime.getTime() - now.getTime() < cutoffMs) {
-            throw ErrorFactory.unprocessable('BOOKING_PAST_CUTOFF', `Bookings for this doctor close ${pref.booking_cutoff_hours}h before the slot.`);
-          }
+        if (pref.booking_cutoff_hours > 0 && slotTime - now.getTime() < pref.booking_cutoff_hours * 3_600_000) {
+          throw ErrorFactory.unprocessable('BOOKING_PAST_CUTOFF', `Bookings for this doctor close ${pref.booking_cutoff_hours}h before the slot.`);
         }
-      }
 
-      // max_new_patients_per_day — count confirmed/pending appointments for the day
-      if (pref.max_new_patients_per_day != null && input.appointment_type !== AppointmentType.FOLLOW_UP) {
-        const Op = (await import('sequelize')).Op;
-        const slotForDate = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
-        if (slotForDate) {
-          const dateStr = slotForDate.slot_datetime.toISOString().split('T')[0];
+        if (pref.max_new_patients_per_day != null && input.appointment_type !== AppointmentType.FOLLOW_UP) {
           const count = await Appointment.count({
             where: {
-              doctor_id,
-              hospital_id,
+              doctor_id, hospital_id,
               appointment_type: { [Op.ne]: AppointmentType.FOLLOW_UP },
-              status: { [Op.in]: [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL] },
-              scheduled_at: { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
+              status:           { [Op.in]: activeStatuses },
+              scheduled_at:     { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
             },
           });
           if (count >= pref.max_new_patients_per_day) {
             throw ErrorFactory.conflict('DAILY_NEW_PATIENT_LIMIT', 'Daily new patient limit reached for this doctor.');
           }
         }
-      }
 
-      // max_followups_per_day
-      if (pref.max_followups_per_day != null && input.appointment_type === AppointmentType.FOLLOW_UP) {
-        const Op = (await import('sequelize')).Op;
-        const slotForDate = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
-        if (slotForDate) {
-          const dateStr = slotForDate.slot_datetime.toISOString().split('T')[0];
+        if (pref.max_followups_per_day != null && input.appointment_type === AppointmentType.FOLLOW_UP) {
           const count = await Appointment.count({
             where: {
-              doctor_id,
-              hospital_id,
+              doctor_id, hospital_id,
               appointment_type: AppointmentType.FOLLOW_UP,
-              status: { [Op.in]: [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL] },
-              scheduled_at: { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
+              status:           { [Op.in]: activeStatuses },
+              scheduled_at:     { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
             },
           });
           if (count >= pref.max_followups_per_day) {
@@ -148,11 +129,15 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     }
     // ── End preference checks ─────────────────────────────────────────────────
 
-    // Resolve payment mode: patient_choice lets patient pick; otherwise force online_prepaid
-    const isPatientChoice = hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE;
-    const resolvedPaymentMode = isPatientChoice && input.payment_mode
-      ? input.payment_mode
-      : PaymentMode.ONLINE_PREPAID;
+    // Resolve payment mode based on hospital collection policy
+    let resolvedPaymentMode: PaymentMode;
+    if (hospital.payment_collection_mode === PaymentCollectionMode.CASH_ONLY) {
+      resolvedPaymentMode = PaymentMode.CASH;
+    } else if (hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE && input.payment_mode) {
+      resolvedPaymentMode = input.payment_mode;
+    } else {
+      resolvedPaymentMode = PaymentMode.ONLINE_PREPAID;
+    }
 
     const result = await sequelize.transaction(async (t) => {
       // Layer 2 — SELECT FOR UPDATE
@@ -305,6 +290,13 @@ export async function cancelAppointment(
   await redis.del(RedisKeys.availableSlots(appointment.doctor_id, dateStr));
   await redis.del(RedisKeys.publishedSlots(appointment.doctor_id, dateStr));
 
+  // Remove patient from consultation queue
+  await ConsultationQueue.update(
+    { status: QueueStatus.CANCELLED },
+    { where: { appointment_id: appointmentId } },
+  );
+  await invalidateQueueCache(appointment.doctor_id, dateStr);
+
   // Phase 3: sync OpdSlotSession back to PUBLISHED (best-effort)
   await syncOpdSlotStatus(appointment.doctor_id, appointment.hospital_id, dateStr, appointment.scheduled_at, OpdSlotStatus.PUBLISHED, null);
 
@@ -342,11 +334,30 @@ export async function rescheduleAppointment(
     throw ErrorFactory.unprocessable('BOOKING_CANNOT_RESCHEDULE', 'This appointment cannot be rescheduled.');
   }
 
+  // Validate lead time / cutoff for the new slot before acquiring the lock
+  const pref = await DoctorBookingPreference.findOne({ where: { doctor_id: appointment.doctor_id, hospital_id: appointment.hospital_id } });
+  if (pref) {
+    const newSlotForCheck = await GeneratedSlot.findByPk(newSlotId, { attributes: ['slot_datetime'] });
+    if (newSlotForCheck) {
+      const now      = new Date();
+      const slotTime = newSlotForCheck.slot_datetime.getTime();
+      if (pref.min_booking_lead_hours > 0 && slotTime - now.getTime() < pref.min_booking_lead_hours * 3_600_000) {
+        throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
+      }
+      if (pref.booking_cutoff_hours > 0 && slotTime - now.getTime() < pref.booking_cutoff_hours * 3_600_000) {
+        throw ErrorFactory.unprocessable('BOOKING_PAST_CUTOFF', `Bookings for this doctor close ${pref.booking_cutoff_hours}h before the slot.`);
+      }
+    }
+  }
+
   // Lock and validate the new slot
   const lockKey = `lock:slot:${newSlotId}`;
   const lockVal = `${patientId}-${Date.now()}`;
   const acquired = await redis.set(lockKey, lockVal, 'EX', RedisTTL.SLOT_LOCK, 'NX');
   if (!acquired) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot is currently being booked. Please try another.');
+
+  // Capture old date before the transaction mutates scheduled_at
+  const oldDate = appointment.scheduled_at.toISOString().split('T')[0];
 
   try {
     const result = await sequelize.transaction(async (t) => {
@@ -378,9 +389,9 @@ export async function rescheduleAppointment(
       return appointment;
     });
 
-    // Invalidate slot caches for both dates
-    const oldDate = appointment.scheduled_at.toISOString().split('T')[0];
     const newDate = result.scheduled_at.toISOString().split('T')[0];
+
+    // Invalidate slot caches for both dates
     await redis.del(RedisKeys.availableSlots(appointment.doctor_id, oldDate));
     await redis.del(RedisKeys.publishedSlots(appointment.doctor_id, oldDate));
     if (oldDate !== newDate) {
@@ -388,9 +399,33 @@ export async function rescheduleAppointment(
       await redis.del(RedisKeys.publishedSlots(appointment.doctor_id, newDate));
     }
 
+    // Update consultation queue: cancel old entry, add new one
+    await ConsultationQueue.update(
+      { status: QueueStatus.CANCELLED },
+      { where: { appointment_id: appointmentId } },
+    );
+    await invalidateQueueCache(appointment.doctor_id, oldDate);
+    await addToQueue(result.id, appointment.doctor_id, appointment.hospital_id, patientId, result.scheduled_at);
+
     // Phase 3: sync OpdSlotSession — free old, book new (best-effort)
-    await syncOpdSlotStatus(appointment.doctor_id, appointment.hospital_id, oldDate, appointment.scheduled_at, OpdSlotStatus.PUBLISHED, null);
+    await syncOpdSlotStatus(appointment.doctor_id, appointment.hospital_id, oldDate, new Date(`${oldDate}T${appointment.scheduled_at.toTimeString().slice(0, 5)}:00`), OpdSlotStatus.PUBLISHED, null);
     await syncOpdSlotStatus(appointment.doctor_id, appointment.hospital_id, newDate, result.scheduled_at, OpdSlotStatus.BOOKED, result.id);
+
+    // Notify patient
+    const reschedDoctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
+    await enqueueNotification({
+      userId:        patientId,
+      appointmentId: result.id,
+      type:          'booking_rescheduled',
+      channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+      priority:      'high',
+      data: {
+        name:   'Patient',
+        doctor: reschedDoctor?.full_name ?? 'Doctor',
+        date:   result.scheduled_at.toDateString(),
+        time:   result.scheduled_at.toTimeString().slice(0, 5),
+      },
+    });
 
     logger.info('Appointment rescheduled', { appointmentId, newSlotId, patientId });
     return ok({
@@ -445,8 +480,11 @@ export async function acceptAppointment(
     throw ErrorFactory.unprocessable('BOOKING_INVALID_STATUS', 'Only appointments awaiting hospital approval can be accepted.');
   }
 
-  await appointment.update({ status: AppointmentStatus.PENDING });
- console.log("checking")
+  // Cash/card appointments don't need online payment — go straight to CONFIRMED
+  const isCashOrCard = appointment.payment_mode === PaymentMode.CASH || appointment.payment_mode === PaymentMode.CARD;
+  const newStatus    = isCashOrCard ? AppointmentStatus.CONFIRMED : AppointmentStatus.PENDING;
+  await appointment.update({ status: newStatus });
+
   const doctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
   await enqueueNotification({
     userId:        appointment.patient_id,
@@ -463,7 +501,7 @@ export async function acceptAppointment(
     },
   });
 
-  logger.info('Appointment accepted by hospital', { appointmentId, hospitalId });
+  logger.info('Appointment accepted by hospital', { appointmentId, hospitalId, newStatus });
   return ok({ message: 'Appointment accepted successfully.' });
 }
 
@@ -501,6 +539,14 @@ export async function rejectAppointment(
 
   const dateStr = appointment.scheduled_at.toISOString().split('T')[0];
   await redis.del(RedisKeys.availableSlots(appointment.doctor_id, dateStr));
+  await redis.del(RedisKeys.publishedSlots(appointment.doctor_id, dateStr));
+
+  // Remove patient from consultation queue
+  await ConsultationQueue.update(
+    { status: QueueStatus.CANCELLED },
+    { where: { appointment_id: appointmentId } },
+  );
+  await invalidateQueueCache(appointment.doctor_id, dateStr);
 
   const rejDoctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
   await enqueueNotification({
