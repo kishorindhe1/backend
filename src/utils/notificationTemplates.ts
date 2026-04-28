@@ -344,6 +344,44 @@ export const templates: Record<string, TemplateSet> = {
     ),
   },
 
+  // ── Booking rescheduled ───────────────────────────────────────────────────
+  booking_rescheduled: {
+    subject: `Appointment Rescheduled – ${BRAND.name}`,
+    sms: `Hi {{name}}, your appt with Dr. {{doctor}} has been rescheduled to {{date}} at {{time}}. -UPCHARIFY`,
+    html: (d) => layout(
+      'Appointment Rescheduled',
+      `Your appointment with Dr. ${d.doctor} has been rescheduled to ${d.date}.`,
+      `
+      ${alertBox(`&#8635;&nbsp; Your appointment has been rescheduled.`)}
+      ${h1('Rescheduled Appointment')}
+      ${detailTable([
+        ['Patient',   String(d.name)],
+        ['Doctor',    `Dr. ${d.doctor}`],
+        ['New Date',  String(d.date)],
+        ['New Time',  String(d.time)],
+      ])}
+      ${p('If this change was unexpected, please contact the hospital.')}
+    `,
+    ),
+  },
+
+  // ── Waitlist slot offered ─────────────────────────────────────────────────
+  waitlist_slot_offered: {
+    subject: `A Slot Just Opened For You – ${BRAND.name}`,
+    sms: `Great news {{name}}! A slot opened on {{date}}. Confirm in the app within {{expiry_minutes}} mins before it moves to someone else. -UPCHARIFY`,
+    html: (d) => layout(
+      'A Slot Just Opened',
+      `A slot on ${d.date} is available — confirm within ${d.expiry_minutes} minutes.`,
+      `
+      ${greenBox(`&#127881;&nbsp; A slot just opened and it's yours — act fast!`)}
+      ${h1('Slot Available')}
+      ${p(`A patient cancelled their appointment and a slot on <strong>${String(d.date)}</strong> is now available for you.`)}
+      ${alertBox(`You have <strong>${String(d.expiry_minutes)} minutes</strong> to confirm this slot in the Upcharify app before it is offered to the next person on the waitlist.`)}
+      ${p('Open the Upcharify app → My Appointments → Waitlist to confirm.', 'font-size:13px;color:#9ca3af;')}
+    `,
+    ),
+  },
+
   // ── Appointment reminder ──────────────────────────────────────────────────
   appointment_reminder: {
     subject: `Appointment Reminder – ${BRAND.name}`,

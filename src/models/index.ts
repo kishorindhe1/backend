@@ -23,8 +23,10 @@ export { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode, Paym
 export { PatientProfile, Gender }      from './patient.model';
 export { HospitalStaff, StaffRole }    from './hospital-staff.model';
 export {
-  DoctorProfile, BookingMode, VerificationStatus,
+  DoctorProfile, BookingMode, BreakType, VerificationStatus,
 }                                      from './doctor.model';
+export { PatientDoctorDuration, DurationSetByRole }        from './patient-doctor-duration.model';
+export { PatientDoctorDurationHistory }                    from './patient-doctor-duration-history.model';
 
 // ── Tier 3 ────────────────────────────────────────────────────────────────────
 export { DoctorHospitalAffiliation, EmploymentType, SlotAutonomyLevel } from './doctor-affiliation.model';
@@ -374,3 +376,22 @@ OpdDailyStats.belongsTo(Hospital,    { foreignKey: 'hospital_id', as: 'hospital'
 
 DoctorProfile.hasMany(OpdDailyStats, { foreignKey: 'doctor_id',  as: 'dailyStats' });
 OpdDailyStats.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+// ── PatientDoctorDuration ─────────────────────────────────────────────────────
+import { PatientDoctorDuration }        from './patient-doctor-duration.model';
+import { PatientDoctorDurationHistory } from './patient-doctor-duration-history.model';
+
+User.hasMany(PatientDoctorDuration,         { foreignKey: 'patient_id', as: 'patientDurations' });
+PatientDoctorDuration.belongsTo(User,         { foreignKey: 'patient_id', as: 'patient' });
+
+User.hasMany(PatientDoctorDuration,         { foreignKey: 'set_by_user_id', as: 'setDurations' });
+PatientDoctorDuration.belongsTo(User,         { foreignKey: 'set_by_user_id', as: 'setByUser' });
+
+DoctorProfile.hasMany(PatientDoctorDuration, { foreignKey: 'doctor_id', as: 'patientDurations' });
+PatientDoctorDuration.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as: 'doctor' });
+
+PatientDoctorDuration.hasMany(PatientDoctorDurationHistory, { foreignKey: 'patient_doctor_duration_id', as: 'history' });
+PatientDoctorDurationHistory.belongsTo(PatientDoctorDuration, { foreignKey: 'patient_doctor_duration_id', as: 'durationRecord' });
+
+User.hasMany(PatientDoctorDurationHistory, { foreignKey: 'changed_by_user_id', as: 'durationChanges' });
+PatientDoctorDurationHistory.belongsTo(User, { foreignKey: 'changed_by_user_id', as: 'changedByUser' });

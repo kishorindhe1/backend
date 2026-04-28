@@ -11,6 +11,7 @@ import {
   OpdToken,
   DoctorBookingPreference,
   ConsultationQueue, QueueStatus,
+  WaitlistEntry, WaitlistStatus,
 }                                         from '../../models';
 import { env }                           from '../../config/env';
 import { ErrorFactory }                  from '../../utils/errors';
@@ -73,6 +74,23 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
   if (!acquired) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot is currently being booked. Please try another.');
 
   try {
+    // One active booking per patient per doctor per day
+    const Op = (await import('sequelize')).Op;
+    const slotForDateCheck = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
+    if (slotForDateCheck) {
+      const dateStr = slotForDateCheck.slot_datetime.toISOString().split('T')[0];
+      const existingToday = await Appointment.findOne({
+        where: {
+          patient_id, doctor_id,
+          status: { [Op.in]: [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL] },
+          scheduled_at: { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
+        },
+      });
+      if (existingToday) {
+        throw ErrorFactory.conflict('DUPLICATE_BOOKING', 'You already have an active booking with this doctor today.');
+      }
+    }
+
     // Check hospital settings before the transaction
     const hospital = await Hospital.findByPk(hospital_id, { attributes: ['appointment_approval', 'payment_collection_mode'] });
     if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
@@ -264,6 +282,15 @@ export async function cancelAppointment(
   if (appointment.status === AppointmentStatus.CANCELLED) throw ErrorFactory.conflict('BOOKING_ALREADY_CANCELLED', 'This appointment is already cancelled.');
   if ([AppointmentStatus.COMPLETED, AppointmentStatus.IN_PROGRESS].includes(appointment.status)) throw ErrorFactory.unprocessable('BOOKING_CANNOT_CANCEL', 'Cannot cancel a completed or in-progress appointment.');
 
+  // Patients cannot cancel within 2 hours of the appointment time
+  if (cancelledBy === CancellationBy.PATIENT) {
+    const hoursUntil = (new Date(appointment.scheduled_at).getTime() - Date.now()) / 3_600_000;
+    if (hoursUntil < 2) {
+      throw ErrorFactory.unprocessable('CANCELLATION_WINDOW_CLOSED',
+        'Cancellation is not allowed within 2 hours of your appointment. Contact the hospital directly.');
+    }
+  }
+
   // Refund only if payment was captured AND cancellation is outside the REFUND_WINDOW_HOURS
   const hoursUntilAppt  = (new Date(appointment.scheduled_at).getTime() - Date.now()) / (1000 * 60 * 60);
   const pastDeadline    = hoursUntilAppt < env.REFUND_WINDOW_HOURS;
@@ -285,6 +312,11 @@ export async function cancelAppointment(
       );
     }
   });
+
+  // Waitlist bridge: offer freed slot to next person on waitlist (if doctor has waitlist enabled)
+  if (appointment.slot_id) {
+    await offerSlotToWaitlist(appointment.slot_id, appointment.doctor_id, appointment.scheduled_at);
+  }
 
   const dateStr = appointment.scheduled_at.toISOString().split('T')[0];
   await redis.del(RedisKeys.availableSlots(appointment.doctor_id, dateStr));
@@ -446,7 +478,7 @@ export async function getAppointment(appointmentId: string, requesterId: string)
       { model: DoctorProfile, as: 'doctor', attributes: ['id', 'full_name', 'specialization', 'profile_photo_url'] },
       { model: Hospital,      as: 'hospital', attributes: ['id', 'name'] },
       { model: GeneratedSlot, as: 'slot',     attributes: ['slot_datetime'] },
-      { model: OpdToken,      as: 'opdToken', attributes: ['token_number'] },
+      { model: OpdToken,      as: 'opdToken', attributes: ['token_number', 'personalized_duration_minutes'] },
     ],
   });
   if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');
@@ -585,3 +617,54 @@ export async function getHospitalAppointments(
   });
   return ok({ rows, count });
 }
+
+// ── Waitlist bridge: offer freed slot to next person in FIFO order ────────────
+// Called after a slot-mode appointment is cancelled and the slot becomes AVAILABLE again.
+async function offerSlotToWaitlist(
+  slotId:      string,
+  doctorId:    string,
+  scheduledAt: Date,
+): Promise<void> {
+  try {
+    const doctor = await DoctorProfile.findByPk(doctorId, {
+      attributes: ['waitlist_enabled', 'waitlist_offer_expiry_minutes'],
+    });
+    if (!doctor?.waitlist_enabled) return;
+
+    const dateStr = scheduledAt.toISOString().split('T')[0];
+
+    const next = await WaitlistEntry.findOne({
+      where: { doctor_id: doctorId, date: dateStr, status: WaitlistStatus.WAITING },
+      order: [['position', 'ASC']],
+    });
+    if (!next) return;
+
+    const expiryMinutes = doctor.waitlist_offer_expiry_minutes ?? 30;
+    const expiresAt     = new Date(Date.now() + expiryMinutes * 60_000);
+
+    await next.update({
+      status:         WaitlistStatus.OFFERED,
+      offered_slot_id: slotId,
+      offered_at:     new Date(),
+      expires_at:     expiresAt,
+    });
+
+    await enqueueNotification({
+      userId:        next.patient_id,
+      appointmentId: undefined,
+      type:          'waitlist_slot_offered',
+      channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+      priority:      'high',
+      data: {
+        name:            'Patient',
+        date:            dateStr,
+        expiry_minutes:  String(expiryMinutes),
+      },
+    });
+
+    logger.info('Waitlist slot offered', { waitlistEntryId: next.id, slotId, expiresAt });
+  } catch (err) {
+    logger.warn('Waitlist bridge failed (non-critical)', { slotId, doctorId, err });
+  }
+}
+

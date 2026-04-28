@@ -41,9 +41,13 @@ export class OpdToken extends Model<
   declare called_at:       Date | null;
   declare consultation_start: Date | null;
   declare consultation_end:   Date | null;
-  declare status:          CreationOptional<OpdTokenStatus>;
-  declare created_at:      CreationOptional<Date>;
-  declare updated_at:      CreationOptional<Date>;
+  declare status:             CreationOptional<OpdTokenStatus>;
+  // Snapshot of effective duration at queue-join time — used for live ETA calculation
+  declare personalized_duration_minutes: number | null;
+  // One-time override set by receptionist at booking; does NOT update stored patient_doctor_durations
+  declare duration_override: number | null;
+  declare created_at:        CreationOptional<Date>;
+  declare updated_at:        CreationOptional<Date>;
 }
 
 OpdToken.init(
@@ -67,6 +71,8 @@ OpdToken.init(
       type: DataTypes.ENUM(...Object.values(OpdTokenStatus)),
       allowNull: false, defaultValue: OpdTokenStatus.ISSUED,
     },
+    personalized_duration_minutes: { type: DataTypes.INTEGER, allowNull: true },
+    duration_override:             { type: DataTypes.INTEGER, allowNull: true },
     created_at: DataTypes.DATE,
     updated_at: DataTypes.DATE,
   },

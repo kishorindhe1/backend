@@ -40,6 +40,8 @@ const BYPASS_QUIET_HOURS: Record<string, boolean> = {
   payment_successful:           false,
   refund_initiated:             false,
   appointment_reminder:         false,
+  booking_rescheduled:          false,
+  waitlist_slot_offered:        true,   // time-sensitive — expires in minutes
 };
 
 // ── Enqueue a notification ────────────────────────────────────────────────────

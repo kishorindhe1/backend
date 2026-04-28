@@ -1,10 +1,11 @@
 import { Op } from 'sequelize';
-import { Schedule, DayOfWeek }        from '../../models';
-import { GeneratedSlot, SlotStatus }  from '../../models';
+import { Schedule, DayOfWeek }           from '../../models';
+import { GeneratedSlot, SlotStatus }     from '../../models';
 import { OpdSlotSession, OpdSlotStatus } from '../../models';
-import { redis, RedisKeys, RedisTTL } from '../../config/redis';
-import { ServiceResponse, ok, fail }  from '../../types';
-import { logger }                     from '../../utils/logger';
+import { DoctorProfile, BreakType }      from '../../models';
+import { redis, RedisKeys, RedisTTL }    from '../../config/redis';
+import { ServiceResponse, ok, fail }     from '../../types';
+import { logger }                        from '../../utils/logger';
 
 // ── Day-of-week helpers ───────────────────────────────────────────────────────
 const JS_DAY_TO_ENUM: DayOfWeek[] = [
@@ -38,9 +39,10 @@ export async function generateSlotsForDoctor(
   fromDate: string,  // YYYY-MM-DD
   toDate: string,    // YYYY-MM-DD
 ): Promise<ServiceResponse<{ generated: number; skipped: number }>> {
-  const schedules = await Schedule.findAll({
-    where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true },
-  });
+  const [schedules, doctor] = await Promise.all([
+    Schedule.findAll({ where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true } }),
+    DoctorProfile.findByPk(doctorId, { attributes: ['break_type', 'morning_end', 'afternoon_start'] }),
+  ]);
 
   if (!schedules.length) {
     return fail('SCHEDULE_NOT_FOUND', 'No active schedule found for this doctor.', 404);
@@ -52,6 +54,10 @@ export async function generateSlotsForDoctor(
   if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) {
     return fail('INVALID_DATE_RANGE', 'from_date must be a valid date on or before to_date.', 400);
   }
+
+  // For split_session doctors: determine the break gap (morning_end → afternoon_start)
+  const isSplitSession = doctor?.break_type === BreakType.SPLIT_SESSION &&
+    doctor.morning_end && doctor.afternoon_start;
 
   let generated = 0;
   let skipped   = 0;
@@ -73,10 +79,20 @@ export async function generateSlotsForDoctor(
       const endTime   = parseTime(schedule.end_time,   targetDate);
       const slotMs    = schedule.slot_duration_minutes * 60 * 1000;
 
+      // Build break gap boundaries for this day (split_session only)
+      const breakStart = isSplitSession ? parseTime(doctor!.morning_end!,       targetDate) : null;
+      const breakEnd   = isSplitSession ? parseTime(doctor!.afternoon_start!,    targetDate) : null;
+
       let current = new Date(startTime);
       let count   = 0;
 
       while (current < endTime && count < schedule.max_patients) {
+        // Skip slots that fall inside the split-session break gap
+        if (breakStart && breakEnd && current >= breakStart && current < breakEnd) {
+          current = new Date(breakEnd);
+          continue;
+        }
+
         // Skip past slots
         if (current <= new Date()) {
           current = new Date(current.getTime() + slotMs);

@@ -8,7 +8,12 @@ import { User }      from './user.model';
 
 export enum BookingMode {
   SLOT_BASED  = 'slot_based',
-  TOKEN_BASED = 'token_based',
+  TOKEN_BASED = 'token_based', // queue-based (token_based is the legacy name)
+}
+
+export enum BreakType {
+  SPLIT_SESSION = 'split_session',
+  FLEXIBLE      = 'flexible',
 }
 
 export enum VerificationStatus {
@@ -51,6 +56,19 @@ export class DoctorProfile extends Model<
   declare on_time_rate:          CreationOptional<number>;
   declare cancellation_rate:     CreationOptional<number>;
   declare completion_rate:       CreationOptional<number>;
+
+  // Lunch break config
+  declare break_type:           CreationOptional<BreakType>;
+  declare morning_end:          string | null;   // HH:MM — split_session only
+  declare afternoon_start:      string | null;   // HH:MM — split_session only
+  declare break_window_start:   string | null;   // HH:MM — flexible only
+  declare break_window_end:     string | null;   // HH:MM — flexible only
+
+  // Per-patient buffer and walk-in
+  declare buffer_time_minutes:              CreationOptional<number>;
+  declare walkin_qr_enabled:                CreationOptional<boolean>;
+  declare waitlist_enabled:                 CreationOptional<boolean>;
+  declare waitlist_offer_expiry_minutes:    CreationOptional<number>;
 
   declare is_active:   CreationOptional<boolean>;
   declare deleted_at:  Date | null;
@@ -98,6 +116,20 @@ DoctorProfile.init(
     on_time_rate:       { type: DataTypes.DECIMAL(5,2), allowNull: false, defaultValue: 0.90 },
     cancellation_rate:  { type: DataTypes.DECIMAL(5,2), allowNull: false, defaultValue: 0.05 },
     completion_rate:    { type: DataTypes.DECIMAL(5,2), allowNull: false, defaultValue: 0.95 },
+
+    break_type: {
+      type: DataTypes.ENUM(...Object.values(BreakType)),
+      allowNull: true, defaultValue: BreakType.FLEXIBLE,
+    },
+    morning_end:        { type: DataTypes.STRING(5), allowNull: true },
+    afternoon_start:    { type: DataTypes.STRING(5), allowNull: true },
+    break_window_start: { type: DataTypes.STRING(5), allowNull: true },
+    break_window_end:   { type: DataTypes.STRING(5), allowNull: true },
+
+    buffer_time_minutes:           { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
+    walkin_qr_enabled:             { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    waitlist_enabled:              { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    waitlist_offer_expiry_minutes: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 
     is_active:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     deleted_at: { type: DataTypes.DATE, allowNull: true },

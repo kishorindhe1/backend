@@ -67,6 +67,53 @@ router.patch(
   }),
 );
 
+// ── Hospital admin — update booking config (break, buffer, waitlist) ─────────
+router.patch(
+  '/:id/booking-config',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body: z.object({
+      break_type:                    z.enum(['split_session', 'flexible']).optional(),
+      morning_end:                   z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+      afternoon_start:               z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+      break_window_start:            z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+      break_window_end:              z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+      buffer_time_minutes:           z.number().int().min(0).max(60).optional(),
+      walkin_qr_enabled:             z.boolean().optional(),
+      waitlist_enabled:              z.boolean().optional(),
+      waitlist_offer_expiry_minutes: z.number().int().min(5).max(120).optional(),
+    }),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const doctorId = (req.params as Record<string, string>).id;
+    const doctor   = await DoctorProfile.findByPk(doctorId);
+    if (!doctor) { sendError(res, 404, { code: 'DOCTOR_NOT_FOUND', message: 'Doctor not found.' }); return; }
+
+    const {
+      break_type, morning_end, afternoon_start,
+      break_window_start, break_window_end,
+      buffer_time_minutes, walkin_qr_enabled,
+      waitlist_enabled, waitlist_offer_expiry_minutes,
+    } = req.body;
+
+    await doctor.update({
+      ...(break_type                    != null && { break_type }),
+      ...(morning_end                   !== undefined && { morning_end }),
+      ...(afternoon_start               !== undefined && { afternoon_start }),
+      ...(break_window_start            !== undefined && { break_window_start }),
+      ...(break_window_end              !== undefined && { break_window_end }),
+      ...(buffer_time_minutes           != null && { buffer_time_minutes }),
+      ...(walkin_qr_enabled             != null && { walkin_qr_enabled }),
+      ...(waitlist_enabled              != null && { waitlist_enabled }),
+      ...(waitlist_offer_expiry_minutes != null && { waitlist_offer_expiry_minutes }),
+    });
+
+    sendSuccess(res, { message: 'Booking config updated successfully.' });
+  }),
+);
+
 // ── Super admin — verify / reject doctor ──────────────────────────────────────
 router.patch(
   '/:id/verify',

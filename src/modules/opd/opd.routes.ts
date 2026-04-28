@@ -31,6 +31,11 @@ const WalkInTokenSchema = z.object({
 
 const SessionIdSchema = z.object({ params: z.object({ sessionId: z.string().uuid() }) });
 
+const PauseSessionSchema = z.object({
+  params: z.object({ sessionId: z.string().uuid() }),
+  body:   z.object({ estimated_break_minutes: z.number().int().min(1).max(180).optional() }),
+});
+
 async function createSession(req: Request, res: Response): Promise<void> {
   const result = await OpdService.createSession(req.body as OpdService.CreateSessionInput);
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
@@ -47,7 +52,8 @@ async function issueWalkInToken(req: Request, res: Response): Promise<void> {
 }
 
 async function pauseSession(req: Request, res: Response): Promise<void> {
-  const result = await OpdService.pauseSession(param(req, 'sessionId'));
+  const { estimated_break_minutes } = req.body as { estimated_break_minutes?: number };
+  const result = await OpdService.pauseSession(param(req, 'sessionId'), estimated_break_minutes);
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   sendSuccess(res, result.data);
 }
@@ -105,7 +111,7 @@ router.get('/',                          authenticate, requireRole(...STAFF), as
 // Staff-only routes
 router.post('/',                         authenticate, requireRole(...STAFF), validate(CreateSessionSchema), asyncHandler(createSession));
 router.patch('/:sessionId/activate',     authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(activateSession));
-router.patch('/:sessionId/pause',        authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(pauseSession));
+router.patch('/:sessionId/pause',        authenticate, requireRole(...STAFF), validate(PauseSessionSchema),  asyncHandler(pauseSession));
 router.patch('/:sessionId/resume',       authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(resumeSession));
 router.patch('/:sessionId/cancel',       authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(cancelSession));
 router.post ('/:sessionId/call-next',    authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(callNext));
@@ -114,5 +120,19 @@ router.post ('/:sessionId/walkin-token', authenticate, requireRole(...STAFF), va
 // Token list + stats — staff + doctor
 router.get  ('/:sessionId/tokens',       authenticate, requireRole(...STAFF), validate(SessionIdSchema), asyncHandler(getTokens));
 router.get  ('/:sessionId/stats',        authenticate, validate(SessionIdSchema), asyncHandler(getStats));
+
+// Public session info — shown to patient before/after QR scan (no token required)
+router.get  ('/:sessionId/public',       validate(SessionIdSchema), asyncHandler(async (req: Request, res: Response) => {
+  const result = await OpdService.getSessionPublicInfo(param(req, 'sessionId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
+
+// Patient joins queue via QR scan — authenticated patient only
+router.post ('/:sessionId/join',         authenticate, requireRole(UserRole.PATIENT), validate(SessionIdSchema), asyncHandler(async (req: Request, res: Response) => {
+  const result = await OpdService.joinAsWalkin(param(req, 'sessionId'), req.user!.sub);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
 
 export default router;

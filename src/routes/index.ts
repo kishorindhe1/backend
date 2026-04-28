@@ -20,6 +20,7 @@ import governanceRoutes    from '../modules/governance/governance.routes';
 import gapBookingRoutes   from '../modules/gap-booking/gap-booking.routes';
 import waitlistRoutes     from '../modules/waitlist/waitlist.routes';
 import doctorAppRoutes     from '../modules/doctor-app/doctor-app.routes';
+import durationRoutes      from '../modules/duration/duration.routes';
 // import teleconsultRoutes   from '../modules/teleconsult/teleconsult.routes'; // deferred
 
 const router = Router();
@@ -94,6 +95,9 @@ router.use('/waitlist',      waitlistRoutes);
 
 // ── Phase 9 — Doctor app ──────────────────────────────────────────────────────
 router.use('/doctor-app',    doctorAppRoutes);
+
+// ── Personalized Duration (new-idea.md v1.2) ──────────────────────────────────
+router.use('/duration',      durationRoutes);
 
 // Phase 10 — Teleconsult: deferred, not in current plan
 // router.use('/teleconsult',   teleconsultRoutes);

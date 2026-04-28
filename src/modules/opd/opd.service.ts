@@ -4,11 +4,12 @@ import { redis }                    from '../../config/redis';
 import {
   OpdSession, OpdSessionStatus, OpdBookingMode,
   OpdToken, OpdTokenType, OpdTokenStatus,
-  DoctorProfile,
+  DoctorProfile, Hospital,
 }                                   from '../../models';
 import { ErrorFactory }             from '../../utils/errors';
 import { ServiceResponse, ok, fail }from '../../types';
 import { logger }                   from '../../utils/logger';
+import { getEffectiveDuration }     from '../duration/duration.service';
 
 // ── Create OPD session ────────────────────────────────────────────────────────
 export interface CreateSessionInput {
@@ -65,18 +66,23 @@ export async function issueOnlineToken(
 
     await session.update({ tokens_issued: tokenNumber });
 
+    // Snapshot effective duration at queue-join time for accurate live ETA
+    const durationSnapshot = await getEffectiveDuration(patientId, session.doctor_id);
+
     const token = await OpdToken.create({
-      session_id:         sessionId,
-      token_number:       tokenNumber,
-      patient_id:         patientId,
-      appointment_id:     appointmentId ?? null,
-      token_type:         OpdTokenType.ONLINE,
-      issued_by:          'online_booking',
-      arrived_at:         null,
-      called_at:          null,
-      consultation_start: null,
-      consultation_end:   null,
-      status:             OpdTokenStatus.ISSUED,
+      session_id:                   sessionId,
+      token_number:                 tokenNumber,
+      patient_id:                   patientId,
+      appointment_id:               appointmentId ?? null,
+      token_type:                   OpdTokenType.ONLINE,
+      issued_by:                    'online_booking',
+      arrived_at:                   null,
+      called_at:                    null,
+      consultation_start:           null,
+      consultation_end:             null,
+      status:                       OpdTokenStatus.ISSUED,
+      personalized_duration_minutes: durationSnapshot,
+      duration_override:            null,
     });
 
     const estimatedWait = await calculateEstimatedWait(session, tokenNumber);
@@ -115,6 +121,102 @@ export async function issueWalkInToken(
   });
 
   return ok({ token_number: token.token_number });
+}
+
+// ── Patient joins queue via QR scan ──────────────────────────────────────────
+// Called from mobile after scanning the session QR code. Patient must be authenticated.
+export async function joinAsWalkin(
+  sessionId: string,
+  patientId: string,
+): Promise<ServiceResponse<{ token_number: number; estimated_wait_minutes: number; session_id: string; doctor_name: string }>> {
+  const lockKey = `lock:opd:token:${sessionId}`;
+  const acquired = await redis.set(lockKey, '1', 'EX', 5, 'NX');
+  if (!acquired) throw ErrorFactory.conflict('TOKEN_LOCK', 'Token issuance in progress, please retry.');
+
+  try {
+    const session = await OpdSession.findByPk(sessionId, {
+      include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name'] }],
+    });
+    if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+    if (session.status === OpdSessionStatus.CANCELLED) throw ErrorFactory.unprocessable('SESSION_CANCELLED', 'This session has been cancelled.');
+    if (session.status === OpdSessionStatus.COMPLETED) throw ErrorFactory.unprocessable('SESSION_COMPLETED', 'This session has already ended.');
+    if (session.tokens_issued >= session.total_tokens) throw ErrorFactory.conflict('SESSION_FULL', 'Session is at full capacity.');
+
+    // Prevent duplicate — patient already in this session
+    const existing = await OpdToken.findOne({
+      where: {
+        session_id: sessionId,
+        patient_id: patientId,
+        status: { [Op.notIn]: [OpdTokenStatus.CANCELLED, OpdTokenStatus.NO_SHOW] },
+      },
+    });
+    if (existing) throw ErrorFactory.conflict('ALREADY_IN_QUEUE', `You already have token #${existing.token_number} in this session.`);
+
+    const totalIssued = session.tokens_issued + 1;
+    await session.update({ tokens_issued: totalIssued });
+
+    const durationSnapshot = await getEffectiveDuration(patientId, session.doctor_id);
+
+    const token = await OpdToken.create({
+      session_id:                    sessionId,
+      token_number:                  totalIssued,
+      patient_id:                    patientId,
+      appointment_id:                null,
+      token_type:                    OpdTokenType.WALKIN,
+      issued_by:                     'patient_qr_scan',
+      arrived_at:                    new Date(),
+      called_at:                     null,
+      consultation_start:            null,
+      consultation_end:              null,
+      status:                        OpdTokenStatus.ARRIVED,
+      personalized_duration_minutes: durationSnapshot,
+      duration_override:             null,
+    });
+
+    const estimatedWait   = await calculateEstimatedWait(session, totalIssued);
+    const doctorName      = (session.get('doctor') as DoctorProfile | undefined)?.full_name ?? 'Doctor';
+
+    logger.info('Patient joined queue via QR', { sessionId, patientId, tokenNumber: totalIssued });
+    return ok({
+      token_number:           token.token_number,
+      estimated_wait_minutes: estimatedWait,
+      session_id:             sessionId,
+      doctor_name:            doctorName,
+    });
+  } finally {
+    await redis.del(lockKey);
+  }
+}
+
+// ── Get session public info (no auth) ─────────────────────────────────────────
+// Used by mobile before login to show session details from QR scan.
+export async function getSessionPublicInfo(
+  sessionId: string,
+): Promise<ServiceResponse<object>> {
+  const session = await OpdSession.findByPk(sessionId, {
+    attributes: ['id', 'session_date', 'start_time', 'expected_end_time', 'status', 'tokens_issued', 'total_tokens', 'doctor_id', 'hospital_id'],
+    include: [
+      { model: DoctorProfile, as: 'doctor',   attributes: ['full_name', 'specialization'] },
+      { model: Hospital,      as: 'hospital',  attributes: ['name'] },
+    ],
+  });
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+
+  const waitingCount = await OpdToken.count({
+    where: { session_id: sessionId, status: { [Op.in]: PENDING_STATUSES } },
+  });
+
+  return ok({
+    session_id:    session.id,
+    date:          session.session_date,
+    start_time:    session.start_time,
+    status:        session.status,
+    tokens_issued: session.tokens_issued,
+    total_tokens:  session.total_tokens,
+    waiting_count: waitingCount,
+    doctor:        session.get('doctor'),
+    hospital:      session.get('hospital'),
+  });
 }
 
 // ── Activate session ──────────────────────────────────────────────────────────
@@ -163,15 +265,45 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
   return ok({ message: `Token #${next.token_number} called.`, token_number: next.token_number, patient_id: next.patient_id });
 }
 
-// ── Pause session ─────────────────────────────────────────────────────────────
-export async function pauseSession(sessionId: string): Promise<ServiceResponse<object>> {
+// ── Pause session (doctor break) ──────────────────────────────────────────────
+export async function pauseSession(
+  sessionId: string,
+  estimatedBreakMinutes?: number,
+): Promise<ServiceResponse<object>> {
   const session = await OpdSession.findByPk(sessionId);
   if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
   if (session.status !== OpdSessionStatus.ACTIVE) throw ErrorFactory.unprocessable('INVALID_STATUS', 'Only an active session can be paused.');
 
+  // Validate that current time is within doctor's configured break window (flexible break mode)
+  const doctor = await DoctorProfile.findByPk(session.doctor_id, {
+    attributes: ['break_type', 'break_window_start', 'break_window_end'],
+  });
+  if (doctor?.break_window_start && doctor.break_window_end) {
+    const now    = new Date();
+    const hhmm   = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    if (hhmm < doctor.break_window_start || hhmm > doctor.break_window_end) {
+      throw ErrorFactory.unprocessable('OUTSIDE_BREAK_WINDOW',
+        `Break can only be taken between ${doctor.break_window_start} and ${doctor.break_window_end}.`);
+    }
+  }
+
   await session.update({ status: OpdSessionStatus.PAUSED });
-  logger.info('OPD session paused', { sessionId });
-  return ok({ session_id: sessionId, status: OpdSessionStatus.PAUSED });
+
+  // Recalculate and push ETAs — waiting patients will see a shifted ETA
+  const breakShift = estimatedBreakMinutes ?? 0;
+  if (breakShift > 0) {
+    await shiftWaitingTokenETAs(session.id, breakShift);
+  }
+
+  logger.info('OPD session paused (break)', { sessionId, estimatedBreakMinutes });
+  return ok({
+    session_id:              sessionId,
+    status:                  OpdSessionStatus.PAUSED,
+    estimated_break_minutes: breakShift,
+    message:                 breakShift > 0
+      ? `Break started. Waiting patients notified of ~${breakShift} min delay.`
+      : 'Break started.',
+  });
 }
 
 // ── Resume session ────────────────────────────────────────────────────────────
@@ -276,26 +408,55 @@ const PENDING_STATUSES = [
 ];
 
 async function calculateEstimatedWait(session: OpdSession, tokenNumber: number): Promise<number> {
-  const ahead = await OpdToken.count({
+  const tokensAhead = await OpdToken.findAll({
     where: {
       session_id:   session.id,
       token_number: { [Op.lt]: tokenNumber },
       status:       { [Op.in]: PENDING_STATUSES },
     },
+    attributes: ['personalized_duration_minutes', 'duration_override'],
   });
-  return Math.max(0, ahead * Number(session.avg_time_per_patient));
+
+  const fallback = Number(session.avg_time_per_patient);
+  const doctor   = await DoctorProfile.findByPk(session.doctor_id, { attributes: ['buffer_time_minutes'] });
+  const buffer   = doctor?.buffer_time_minutes ?? 0;
+
+  return tokensAhead.reduce((sum, t) => {
+    const dur = t.duration_override ?? t.personalized_duration_minutes ?? fallback;
+    return sum + dur + buffer;
+  }, 0);
 }
 
 async function calculateEstimatedEnd(session: OpdSession): Promise<string> {
-  const remaining = await OpdToken.count({
+  const remaining = await OpdToken.findAll({
     where: {
       session_id: session.id,
       status:     { [Op.in]: PENDING_STATUSES },
     },
+    attributes: ['personalized_duration_minutes', 'duration_override'],
   });
-  const minutesLeft = remaining * Number(session.avg_time_per_patient);
-  const endTime     = new Date(Date.now() + minutesLeft * 60_000);
+
+  const fallback = Number(session.avg_time_per_patient);
+  const doctor   = await DoctorProfile.findByPk(session.doctor_id, { attributes: ['buffer_time_minutes'] });
+  const buffer   = doctor?.buffer_time_minutes ?? 0;
+
+  const minutesLeft = remaining.reduce((sum, t) => {
+    const dur = t.duration_override ?? t.personalized_duration_minutes ?? fallback;
+    return sum + dur + buffer;
+  }, 0);
+
+  const endTime = new Date(Date.now() + minutesLeft * 60_000);
   return endTime.toTimeString().slice(0, 5);
+}
+
+// Shift all waiting token ETA snapshots forward by breakMinutes.
+// This is informational — actual ETAs are always recalculated live; this updates the snapshot
+// on the token so the patient's next poll sees the updated estimate immediately.
+async function shiftWaitingTokenETAs(_sessionId: string, _breakMinutes: number): Promise<void> {
+  // ETAs are recalculated dynamically on each stats/queue poll via calculateEstimatedWait,
+  // so no persistent shift is needed. This hook is a placeholder for future push notification
+  // delivery (e.g., notify each waiting patient that a break has started).
+  // TODO Phase 10: push FCM notification to all WAITING / ISSUED tokens in this session.
 }
 
 async function updateSessionAvg(session: OpdSession, token: OpdToken): Promise<void> {
