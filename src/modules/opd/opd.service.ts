@@ -1,13 +1,15 @@
 import { Op } from 'sequelize';
-import { sequelize }                from '../../config/database';
 import { redis }                    from '../../config/redis';
 import {
   OpdSession, OpdSessionStatus, OpdBookingMode,
   OpdToken, OpdTokenType, OpdTokenStatus,
   DoctorProfile, Hospital,
+  Appointment, AppointmentStatus, AppointmentType, PaymentMode, PaymentStatus,
+  ConsultationQueue, QueueStatus,
+  DoctorHospitalAffiliation,
 }                                   from '../../models';
 import { ErrorFactory }             from '../../utils/errors';
-import { ServiceResponse, ok, fail }from '../../types';
+import { ServiceResponse, ok }      from '../../types';
 import { logger }                   from '../../utils/logger';
 import { getEffectiveDuration }     from '../duration/duration.service';
 
@@ -128,7 +130,7 @@ export async function issueWalkInToken(
 export async function joinAsWalkin(
   sessionId: string,
   patientId: string,
-): Promise<ServiceResponse<{ token_number: number; estimated_wait_minutes: number; session_id: string; doctor_name: string }>> {
+): Promise<ServiceResponse<{ token_number: number; estimated_wait_minutes: number; session_id: string; doctor_name: string; appointment_id: string }>> {
   const lockKey = `lock:opd:token:${sessionId}`;
   const acquired = await redis.set(lockKey, '1', 'EX', 5, 'NX');
   if (!acquired) throw ErrorFactory.conflict('TOKEN_LOCK', 'Token issuance in progress, please retry.');
@@ -157,11 +159,35 @@ export async function joinAsWalkin(
 
     const durationSnapshot = await getEffectiveDuration(patientId, session.doctor_id);
 
-    const token = await OpdToken.create({
+    // Fetch consultation fee from doctor–hospital affiliation
+    const affiliation = await DoctorHospitalAffiliation.findOne({
+      where: { doctor_id: session.doctor_id, hospital_id: session.hospital_id, is_active: true },
+      attributes: ['consultation_fee'],
+    });
+    const fee = parseFloat(String(affiliation?.consultation_fee ?? 0));
+
+    // Create appointment so the visit is visible in the patient's appointments list
+    const appointment = await Appointment.create({
+      patient_id:       patientId,
+      doctor_id:        session.doctor_id,
+      hospital_id:      session.hospital_id,
+      slot_id:          null,
+      scheduled_at:     new Date(),
+      appointment_type: AppointmentType.WALK_IN,
+      payment_mode:     PaymentMode.CASH,
+      payment_status:   PaymentStatus.PENDING,
+      status:           AppointmentStatus.CONFIRMED,
+      consultation_fee: fee,
+      platform_fee:     parseFloat((fee * 0.02).toFixed(2)),
+      doctor_payout:    parseFloat((fee * 0.98).toFixed(2)),
+      notes:            null,
+    });
+
+    const opdToken = await OpdToken.create({
       session_id:                    sessionId,
       token_number:                  totalIssued,
       patient_id:                    patientId,
-      appointment_id:                null,
+      appointment_id:                appointment.id,
       token_type:                    OpdTokenType.WALKIN,
       issued_by:                     'patient_qr_scan',
       arrived_at:                    new Date(),
@@ -173,15 +199,38 @@ export async function joinAsWalkin(
       duration_override:             null,
     });
 
-    const estimatedWait   = await calculateEstimatedWait(session, totalIssued);
-    const doctorName      = (session.get('doctor') as DoctorProfile | undefined)?.full_name ?? 'Doctor';
+    // Add to consultation queue so patient can track position
+    const queueDate = new Date().toISOString().split('T')[0];
+    const nextPosition = (await ConsultationQueue.count({
+      where: { doctor_id: session.doctor_id, queue_date: queueDate },
+    })) + 1;
 
-    logger.info('Patient joined queue via QR', { sessionId, patientId, tokenNumber: totalIssued });
+    await ConsultationQueue.create({
+      appointment_id:     appointment.id,
+      doctor_id:          session.doctor_id,
+      hospital_id:        session.hospital_id,
+      patient_id:         patientId,
+      queue_date:         queueDate,
+      queue_position:     nextPosition,
+      status:             QueueStatus.WAITING,
+      arrived_at:         new Date(),
+      estimated_start_at: null,
+      called_at:          null,
+      actual_start_at:    null,
+      actual_end_at:      null,
+      notified_at:        null,
+    });
+
+    const estimatedWait = await calculateEstimatedWait(session, totalIssued);
+    const doctorName    = (session.get('doctor') as DoctorProfile | undefined)?.full_name ?? 'Doctor';
+
+    logger.info('Patient joined queue via QR', { sessionId, patientId, tokenNumber: totalIssued, appointmentId: appointment.id });
     return ok({
-      token_number:           token.token_number,
+      token_number:           opdToken.token_number,
       estimated_wait_minutes: estimatedWait,
       session_id:             sessionId,
       doctor_name:            doctorName,
+      appointment_id:         appointment.id,
     });
   } finally {
     await redis.del(lockKey);
