@@ -1,9 +1,11 @@
+import { Op }               from 'sequelize';
 import { sequelize }        from '../../config/database';
 import { User }              from '../../models';
 import { DoctorProfile, VerificationStatus } from '../../models';
 import { DoctorHospitalAffiliation }         from '../../models';
 import { Hospital }          from '../../models';
 import { Schedule }          from '../../models';
+import { GeneratedSlot, SlotStatus } from '../../models';
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { logger }            from '../../utils/logger';
 
@@ -125,7 +127,20 @@ export async function getDoctorProfile(doctorProfileId: string): Promise<Service
   if (!doctor) return fail('DOCTOR_NOT_FOUND', 'Doctor not found.', 404);
   if (!doctor.is_active) return fail('DOCTOR_SUSPENDED', 'Doctor profile is not active.', 403);
 
-  return ok(doctor);
+  // Compute available_today: true only if the doctor has at least one
+  // available or booked slot today (not just an active account).
+  const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday   = new Date(); endOfToday.setHours(23, 59, 59, 999);
+
+  const slotsToday = await GeneratedSlot.count({
+    where: {
+      doctor_id:     doctorProfileId,
+      status:        { [Op.in]: [SlotStatus.AVAILABLE, SlotStatus.BOOKED] },
+      slot_datetime: { [Op.between]: [startOfToday, endOfToday] },
+    },
+  });
+
+  return ok({ ...doctor.toJSON(), available_today: slotsToday > 0 });
 }
 
 // ── List doctors — filtered search ───────────────────────────────────────────
@@ -136,7 +151,6 @@ export async function listDoctors(filters: {
   page:            number;
   perPage:         number;
 }): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
-  const { Op } = await import('sequelize');
   const { page, perPage } = filters;
 
   const hospitalWhere: Record<string, unknown> = {};
