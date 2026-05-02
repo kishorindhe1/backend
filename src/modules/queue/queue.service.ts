@@ -2,14 +2,18 @@ import { Op }                          from 'sequelize';
 import { redis, RedisKeys, RedisTTL }  from '../../config/redis';
 import {
   ConsultationQueue, QueueStatus,
-  Appointment, AppointmentStatus,
+  Appointment, AppointmentStatus, AppointmentType, PaymentMode, PaymentStatus,
   DoctorProfile, Hospital,
   DoctorDelayEvent, DelayStatus,
   UserNotificationPreference,
   User, PatientProfile,
+  OpdSession, OpdSessionStatus,
+  DoctorHospitalAffiliation,
+  ProcedureType,
 }                                       from '../../models';
 import { ServiceResponse, ok, fail }    from '../../types';
 import { logger }                       from '../../utils/logger';
+import { getEffectiveDuration }         from '../duration/duration.service';
 
 export interface QueueStateResult {
   appointment_id:           string;
@@ -280,6 +284,146 @@ export async function addToQueue(
 
   logger.info('Patient added to queue', { appointmentId, position });
   return ok({ queue_position: position });
+}
+
+// ── Live queue status — public, used by patient app before joining ────────────
+export async function getLiveStatus(
+  doctorId:   string,
+  hospitalId: string,
+): Promise<ServiceResponse<{
+  is_open:                boolean;
+  queue_count:            number;
+  estimated_wait_minutes: number;
+  session_id:             string | null;
+}>> {
+  const today = new Date().toISOString().split('T')[0];
+
+  const session = await OpdSession.findOne({
+    where: {
+      doctor_id:    doctorId,
+      hospital_id:  hospitalId,
+      session_date: today,
+      status:       OpdSessionStatus.ACTIVE,
+    },
+    attributes: ['id', 'total_tokens', 'tokens_issued'],
+  });
+
+  if (!session) return ok({ is_open: false, queue_count: 0, estimated_wait_minutes: 0, session_id: null });
+
+  const queueCount = await ConsultationQueue.count({
+    where: {
+      doctor_id:  doctorId,
+      queue_date: today,
+      status:     { [Op.in]: [QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.IN_CONSULTATION] },
+    },
+  });
+
+  const doctor = await DoctorProfile.findByPk(doctorId, { attributes: ['avg_consultation_minutes', 'no_show_rate_historical'] });
+  const avgMin = doctor?.avg_consultation_minutes ?? 15;
+  const estimatedWait = Math.round(queueCount * avgMin);
+
+  return ok({
+    is_open:                true,
+    queue_count:            queueCount,
+    estimated_wait_minutes: estimatedWait,
+    session_id:             session.id,
+  });
+}
+
+// ── Patient joins queue from app (no QR scan needed) ─────────────────────────
+export async function joinQueueFromApp(
+  patientId:        string,
+  doctorId:         string,
+  hospitalId:       string,
+  procedureTypeId?: string,
+): Promise<ServiceResponse<{
+  appointment_id:         string;
+  token_number:           number;
+  queue_position:         number;
+  estimated_wait_minutes: number;
+}>> {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Must have an active OPD session
+  const session = await OpdSession.findOne({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, session_date: today, status: OpdSessionStatus.ACTIVE },
+    attributes: ['id', 'tokens_issued', 'total_tokens'],
+  });
+  if (!session) return fail('NO_ACTIVE_SESSION', 'This doctor does not have an active OPD session right now.', 409);
+  if (session.tokens_issued >= session.total_tokens) return fail('SESSION_FULL', 'Queue is full for today. Please try again later.', 409);
+
+  // Prevent duplicate — patient already in today's queue for this doctor
+  const existing = await ConsultationQueue.findOne({
+    where: {
+      doctor_id:  doctorId,
+      patient_id: patientId,
+      queue_date: today,
+      status:     { [Op.in]: [QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.IN_CONSULTATION] },
+    },
+  });
+  if (existing) return fail('ALREADY_IN_QUEUE', 'You are already in this doctor\'s queue today.', 409);
+
+  const affiliation = await DoctorHospitalAffiliation.findOne({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true },
+    attributes: ['consultation_fee'],
+  });
+  const fee = parseFloat(String(affiliation?.consultation_fee ?? 0));
+
+  // Resolve procedure duration for queue ETA (if procedure selected)
+  let procedureNote: string | null = null;
+  if (procedureTypeId) {
+    const proc = await ProcedureType.findOne({ where: { id: procedureTypeId, doctor_id: doctorId }, attributes: ['name'] });
+    if (proc) procedureNote = proc.name;
+  }
+
+  const appointment = await Appointment.create({
+    patient_id:       patientId,
+    doctor_id:        doctorId,
+    hospital_id:      hospitalId,
+    slot_id:          null,
+    scheduled_at:     new Date(),
+    appointment_type: AppointmentType.WALK_IN,
+    payment_mode:     PaymentMode.CASH,
+    payment_status:   PaymentStatus.PENDING,
+    status:           AppointmentStatus.CONFIRMED,
+    consultation_fee: fee,
+    platform_fee:     parseFloat((fee * 0.02).toFixed(2)),
+    doctor_payout:    parseFloat((fee * 0.98).toFixed(2)),
+    notes:            procedureNote,
+  });
+
+  const durationSnapshot = await getEffectiveDuration(patientId, doctorId);
+
+  const nextPosition = (await ConsultationQueue.count({ where: { doctor_id: doctorId, queue_date: today } })) + 1;
+  await ConsultationQueue.create({
+    appointment_id:     appointment.id,
+    doctor_id:          doctorId,
+    hospital_id:        hospitalId,
+    patient_id:         patientId,
+    queue_date:         today,
+    queue_position:     nextPosition,
+    status:             QueueStatus.WAITING,
+    arrived_at:         null,
+    estimated_start_at: null,
+    called_at:          null,
+    actual_start_at:    null,
+    actual_end_at:      null,
+    notified_at:        null,
+  });
+
+  await session.update({ tokens_issued: session.tokens_issued + 1 });
+
+  const doctor = await DoctorProfile.findByPk(doctorId, { attributes: ['avg_consultation_minutes'] });
+  const avgMin  = doctor?.avg_consultation_minutes ?? 15;
+  const estimatedWait = Math.round((nextPosition - 1) * avgMin);
+
+  logger.info('Patient joined queue from app', { patientId, doctorId, hospitalId, appointmentId: appointment.id });
+  return ok({
+    appointment_id:         appointment.id,
+    token_number:           session.tokens_issued,
+    queue_position:         nextPosition,
+    estimated_wait_minutes: estimatedWait,
+  });
 }
 
 export async function invalidateQueueCache(doctorId: string, date: string): Promise<void> {

@@ -34,6 +34,16 @@ const DoctorQueueSchema = z.object({
   params: z.object({ doctorId: z.string().uuid(), hospitalId: z.string().uuid() }),
   query:  z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }),
 });
+const LiveStatusSchema = z.object({
+  params: z.object({ doctorId: z.string().uuid(), hospitalId: z.string().uuid() }),
+});
+const JoinQueueSchema = z.object({
+  body: z.object({
+    doctor_id:         z.string().uuid(),
+    hospital_id:       z.string().uuid(),
+    procedure_type_id: z.string().uuid().optional(),
+  }),
+});
 
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
@@ -72,6 +82,29 @@ router.get('/:doctorId/:hospitalId',
   authenticate,
   validate(DoctorQueueSchema),
   asyncHandler(getDoctorDayQueue),
+);
+
+// Public — live queue status (is session open, count, wait) — no auth
+router.get('/live/:doctorId/:hospitalId',
+  validate(LiveStatusSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await QueueService.getLiveStatus(param(req, 'doctorId'), param(req, 'hospitalId'));
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+// Patient — join queue from app (no QR scan)
+router.post('/join',
+  authenticate,
+  validate(JoinQueueSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user   = req.user as JwtAccessPayload;
+    const { doctor_id, hospital_id, procedure_type_id } = req.body;
+    const result = await QueueService.joinQueueFromApp(user.sub, doctor_id, hospital_id, procedure_type_id);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data, 201);
+  }),
 );
 
 export default router;
