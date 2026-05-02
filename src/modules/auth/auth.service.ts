@@ -1,7 +1,6 @@
 import { env }                        from '../../config/env';
 import { redis, RedisKeys, RedisTTL } from '../../config/redis';
-import { User }                       from '../../models';
-import { PatientProfile }             from '../../models';
+import { User, PatientProfile, UserNotificationPreference } from '../../models';
 import { generateOTP, hashOTP, verifyOTP, maskMobile, addMinutes } from '../../utils/helpers';
 import {
   issueTokenPair, verifyRefreshToken, blacklistToken,
@@ -54,7 +53,7 @@ export async function requestOtp(mobile: string, countryCode = '+91'): Promise<S
   });
 }
 
-export async function verifyOtp(mobile: string, otp: string): Promise<ServiceResponse<VerifyOtpResult>> {
+export async function verifyOtp(mobile: string, otp: string, fcmToken?: string): Promise<ServiceResponse<VerifyOtpResult>> {
   const user = await User.findOne({ where: { mobile } });
   if (!user) return fail('AUTH_OTP_INVALID', 'Invalid OTP.', 401);
 
@@ -95,6 +94,14 @@ export async function verifyOtp(mobile: string, otp: string): Promise<ServiceRes
 
   const tokens = issueTokenPair({ userId: user.id, role: user.role, accountStatus: AccountStatus.ACTIVE, profileStatus: profile.profile_status });
   await storeRefreshToken(user.id, tokens.refresh_token);
+
+  if (fcmToken) {
+    const [pref] = await UserNotificationPreference.findOrCreate({
+      where:    { user_id: user.id },
+      defaults: { user_id: user.id, fcm_token: fcmToken },
+    });
+    if (pref.fcm_token !== fcmToken) await pref.update({ fcm_token: fcmToken });
+  }
 
   if (isNewUser) await incrementCounter('registrations');
   logger.info('OTP verified', { userId: user.id, mobile: maskMobile(mobile), isNewUser });

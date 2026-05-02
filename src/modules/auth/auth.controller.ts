@@ -10,8 +10,8 @@ export async function requestOtp(req: Request, res: Response): Promise<void> {
 }
 
 export async function verifyOtp(req: Request, res: Response): Promise<void> {
-  const { mobile, otp } = req.body as { mobile: string; otp: string };
-  const result = await AuthService.verifyOtp(mobile, otp);
+  const { mobile, otp, fcm_token } = req.body as { mobile: string; otp: string; fcm_token?: string };
+  const result = await AuthService.verifyOtp(mobile, otp, fcm_token);
   handleResult(res, result, (data) => sendCreated(res, data));
 }
 

@@ -23,6 +23,7 @@ export const VerifyOtpSchema = z.object({
       .trim()
       .length(6, 'OTP must be exactly 6 digits')
       .regex(/^\d{6}$/, 'OTP must contain only digits'),
+    fcm_token: z.string().min(1).optional(),
   }),
 });
 

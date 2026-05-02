@@ -134,7 +134,7 @@ export async function sendEmail(
   htmlBody?: string,
 ): Promise<{ msgId: string }> {
   if (env.NODE_ENV === 'development') {
-    logger.debug(`📧  [EMAIL → ${to}] ${subject} (body omitted)`);
+    logger.info(`📧  [DEV EMAIL → ${to}] ${subject}\n${textBody}`);
     return { msgId: `email_dev_${Date.now()}` };
   }
 
