@@ -307,14 +307,15 @@ export async function markDoctorAbsent(
 
 // ── Book walk-in patient ──────────────────────────────────────────────────────
 export interface WalkInInput {
-  doctor_id:   string;
-  hospital_id: string;
-  patient_mobile: string;
+  doctor_id:       string;
+  hospital_id:     string;
+  patient_mobile:  string;
   receptionist_id: string;
+  notes?:          string;
 }
 
 export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<object>> {
-  const { doctor_id, hospital_id, patient_mobile, receptionist_id } = input;
+  const { doctor_id, hospital_id, patient_mobile, receptionist_id, notes } = input;
 
   // Find or create patient
   const [user] = await User.findOrCreate({
@@ -345,7 +346,7 @@ export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<ob
     consultation_fee: fee,
     platform_fee:     platformFee,
     doctor_payout:    doctorPayout,
-    notes:            null,
+    notes:            notes ?? null,
     cancellation_reason: null,
     cancelled_by:     null,
     cancelled_at:     null,

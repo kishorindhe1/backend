@@ -31,6 +31,7 @@ const WalkInSchema = z.object({
     doctor_id:      z.string().uuid(),
     hospital_id:    z.string().uuid(),
     patient_mobile: z.string().regex(/^[6-9]\d{9}$/),
+    notes:          z.string().max(300).optional(),
   }),
 });
 
