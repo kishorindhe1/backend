@@ -316,6 +316,15 @@ export interface WalkInInput {
 
 export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<object>> {
   const { doctor_id, hospital_id, patient_mobile, receptionist_id, notes } = input;
+  const today = new Date().toISOString().split('T')[0];
+
+  // Walk-ins require an active OPD session — consistent with joinQueueFromApp
+  const { OpdSession, OpdSessionStatus } = await import('../../models');
+  const activeSession = await OpdSession.findOne({
+    where: { doctor_id, hospital_id, session_date: today, status: OpdSessionStatus.ACTIVE },
+    attributes: ['id'],
+  });
+  if (!activeSession) return fail('NO_ACTIVE_SESSION', 'No active OPD session for this doctor right now. Start a session before adding walk-ins.', 409);
 
   // Find or create patient
   const [user] = await User.findOrCreate({
@@ -451,7 +460,7 @@ async function cancelDoctorDayAppointments(doctorId: string, hospitalId: string,
     where: {
       doctor_id: doctorId, hospital_id: hospitalId,
       scheduled_at: { [Op.between]: [startOfDay, endOfDay] },
-      status: { [Op.in]: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED] },
+      status: { [Op.in]: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL] },
     },
   });
 

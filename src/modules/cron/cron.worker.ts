@@ -15,7 +15,9 @@ type CronJobType =
   | 'refresh_search_index'
   | 'compute_reliability_scores'
   | 'archive_daily_stats'
-  | 'expire_approval_timeouts';
+  | 'expire_approval_timeouts'
+  | 'expire_pending_payments'
+  | 'auto_noshow_absent_patients';
 
 // ── Cron queue ────────────────────────────────────────────────────────────────
 export const cronQueue = new Queue<{ type: CronJobType }>('cron', {
@@ -57,6 +59,12 @@ export async function scheduleCronJobs(): Promise<void> {
 
   // Phase 8 — expire doctor approval timeouts every 10 minutes
   await cronQueue.add('expire_approval_timeouts', { type: 'expire_approval_timeouts' }, { repeat: { pattern: '*/10 * * * *' } });
+
+  // Logical gap fixes
+  // Cancel PENDING (unpaid) appointments after 30 min — frees the slot back to AVAILABLE
+  await cronQueue.add('expire_pending_payments',      { type: 'expire_pending_payments' },      { repeat: { pattern: '*/5 * * * *' } });
+  // Mark queue entries NO_SHOW if patient joined from app but never physically arrived after 30 min
+  await cronQueue.add('auto_noshow_absent_patients',  { type: 'auto_noshow_absent_patients' },  { repeat: { pattern: '*/5 * * * *' } });
 
   logger.info('⏰  Cron jobs scheduled');
 }
@@ -286,6 +294,57 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
       }
 
       if (expired > 0) logger.info('Approval timeouts expired', { expired });
+      break;
+    }
+
+    // ── Expire unpaid PENDING appointments after 30 min ──────────────────────
+    case 'expire_pending_payments': {
+      const { Appointment, AppointmentStatus, PaymentStatus, CancellationBy, GeneratedSlot, SlotStatus } = await import('../../models');
+      const { Op } = await import('sequelize');
+
+      const cutoff = new Date(Date.now() - 30 * 60_000); // 30 minutes ago
+      const stale = await Appointment.findAll({
+        where: {
+          status:         AppointmentStatus.PENDING,
+          payment_status: PaymentStatus.PENDING,
+          created_at:     { [Op.lt]: cutoff },
+        },
+        attributes: ['id', 'slot_id', 'patient_id'],
+      });
+
+      let freed = 0;
+      for (const appt of stale) {
+        await appt.update({ status: AppointmentStatus.CANCELLED, cancellation_reason: 'Payment not completed within 30 minutes', cancelled_by: CancellationBy.SYSTEM, cancelled_at: new Date() });
+        if (appt.slot_id) {
+          await GeneratedSlot.update({ status: SlotStatus.AVAILABLE, appointment_id: null }, { where: { id: appt.slot_id } });
+        }
+        freed++;
+      }
+      if (freed > 0) logger.info('Expired pending payments', { freed });
+      break;
+    }
+
+    // ── Mark NO_SHOW for app queue-join patients who never arrived (30 min) ──
+    case 'auto_noshow_absent_patients': {
+      const { ConsultationQueue, QueueStatus } = await import('../../models');
+      const { Op } = await import('sequelize');
+
+      const cutoff = new Date(Date.now() - 30 * 60_000);
+      const absent = await ConsultationQueue.findAll({
+        where: {
+          status:     QueueStatus.WAITING,
+          arrived_at: null,              // joined from app, never physically arrived
+          created_at: { [Op.lt]: cutoff },
+        },
+        attributes: ['id', 'appointment_id', 'doctor_id', 'queue_date'],
+      });
+
+      let marked = 0;
+      for (const entry of absent) {
+        await entry.update({ status: QueueStatus.NO_SHOW });
+        marked++;
+      }
+      if (marked > 0) logger.info('Auto no-show: absent app-queue patients', { marked });
       break;
     }
 

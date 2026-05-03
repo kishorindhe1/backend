@@ -1,3 +1,4 @@
+import { Op }                             from 'sequelize';
 import { sequelize }                     from '../../config/database';
 import { redis, RedisKeys, RedisTTL }    from '../../config/redis';
 import {
@@ -75,7 +76,6 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
 
   try {
     // One active booking per patient per doctor per day
-    const Op = (await import('sequelize')).Op;
     const slotForDateCheck = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
     if (slotForDateCheck) {
       const dateStr = slotForDateCheck.slot_datetime.toISOString().split('T')[0];
@@ -96,56 +96,25 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
     const isAutoApproval = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
 
-    // ── Doctor booking preference checks ──────────────────────────────────────
+    // ── Doctor booking preference checks (lead time + cutoff only) ──────────────
     const pref = await DoctorBookingPreference.findOne({ where: { doctor_id, hospital_id } });
     if (pref) {
-      // Single slot fetch reused across all preference checks
       const prefSlot = await GeneratedSlot.findByPk(slot_id, { attributes: ['slot_datetime'] });
       if (prefSlot) {
         const now      = new Date();
         const slotTime = prefSlot.slot_datetime.getTime();
-        const dateStr  = prefSlot.slot_datetime.toISOString().split('T')[0];
-        const Op       = (await import('sequelize')).Op;
-        const activeStatuses = [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL];
 
         if (pref.min_booking_lead_hours > 0 && slotTime - now.getTime() < pref.min_booking_lead_hours * 3_600_000) {
           throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
         }
-
         if (pref.booking_cutoff_hours > 0 && slotTime - now.getTime() < pref.booking_cutoff_hours * 3_600_000) {
           throw ErrorFactory.unprocessable('BOOKING_PAST_CUTOFF', `Bookings for this doctor close ${pref.booking_cutoff_hours}h before the slot.`);
         }
-
-        if (pref.max_new_patients_per_day != null && input.appointment_type !== AppointmentType.FOLLOW_UP) {
-          const count = await Appointment.count({
-            where: {
-              doctor_id, hospital_id,
-              appointment_type: { [Op.ne]: AppointmentType.FOLLOW_UP },
-              status:           { [Op.in]: activeStatuses },
-              scheduled_at:     { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
-            },
-          });
-          if (count >= pref.max_new_patients_per_day) {
-            throw ErrorFactory.conflict('DAILY_NEW_PATIENT_LIMIT', 'Daily new patient limit reached for this doctor.');
-          }
-        }
-
-        if (pref.max_followups_per_day != null && input.appointment_type === AppointmentType.FOLLOW_UP) {
-          const count = await Appointment.count({
-            where: {
-              doctor_id, hospital_id,
-              appointment_type: AppointmentType.FOLLOW_UP,
-              status:           { [Op.in]: activeStatuses },
-              scheduled_at:     { [Op.between]: [new Date(`${dateStr}T00:00:00`), new Date(`${dateStr}T23:59:59`)] },
-            },
-          });
-          if (count >= pref.max_followups_per_day) {
-            throw ErrorFactory.conflict('DAILY_FOLLOWUP_LIMIT', 'Daily follow-up limit reached for this doctor.');
-          }
-        }
+        // Daily cap counts are checked INSIDE the transaction (see below)
+        // so the read and the insert share the same DB transaction, eliminating the race.
       }
     }
-    // ── End preference checks ─────────────────────────────────────────────────
+    // ── End pre-transaction preference checks ─────────────────────────────────
 
     // Resolve payment mode based on hospital collection policy
     let resolvedPaymentMode: PaymentMode;
@@ -183,6 +152,30 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
         initialStatus = AppointmentStatus.CONFIRMED; // no online payment needed
       } else {
         initialStatus = AppointmentStatus.PENDING;   // awaiting online payment
+      }
+
+      // Daily cap checks — inside the transaction so read + insert are atomic
+      if (pref) {
+        const slotDateStr    = slot.slot_datetime.toISOString().split('T')[0];
+        const dayStart       = new Date(`${slotDateStr}T00:00:00`);
+        const dayEnd         = new Date(`${slotDateStr}T23:59:59`);
+        const capStatuses    = [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL];
+
+        if (pref.max_new_patients_per_day != null && input.appointment_type !== AppointmentType.FOLLOW_UP) {
+          const count = await Appointment.count({
+            where: { doctor_id, hospital_id, appointment_type: { [Op.ne]: AppointmentType.FOLLOW_UP }, status: { [Op.in]: capStatuses }, scheduled_at: { [Op.between]: [dayStart, dayEnd] } },
+            transaction: t,
+          });
+          if (count >= pref.max_new_patients_per_day) throw ErrorFactory.conflict('DAILY_NEW_PATIENT_LIMIT', 'Daily new patient limit reached for this doctor.');
+        }
+
+        if (pref.max_followups_per_day != null && input.appointment_type === AppointmentType.FOLLOW_UP) {
+          const count = await Appointment.count({
+            where: { doctor_id, hospital_id, appointment_type: AppointmentType.FOLLOW_UP, status: { [Op.in]: capStatuses }, scheduled_at: { [Op.between]: [dayStart, dayEnd] } },
+            transaction: t,
+          });
+          if (count >= pref.max_followups_per_day) throw ErrorFactory.conflict('DAILY_FOLLOWUP_LIMIT', 'Daily follow-up limit reached for this doctor.');
+        }
       }
 
       // Layer 3 — unique slot_id constraint catches any slip-through
@@ -365,6 +358,9 @@ export async function rescheduleAppointment(
   if ([AppointmentStatus.CANCELLED, AppointmentStatus.COMPLETED, AppointmentStatus.IN_PROGRESS].includes(appointment.status)) {
     throw ErrorFactory.unprocessable('BOOKING_CANNOT_RESCHEDULE', 'This appointment cannot be rescheduled.');
   }
+  if (appointment.slot_id === newSlotId) {
+    throw ErrorFactory.conflict('SAME_SLOT', 'The new slot is the same as the current slot. Please choose a different time.');
+  }
 
   // Validate lead time / cutoff for the new slot before acquiring the lock
   const pref = await DoctorBookingPreference.findOne({ where: { doctor_id: appointment.doctor_id, hospital_id: appointment.hospital_id } });
@@ -411,11 +407,13 @@ export async function rescheduleAppointment(
 
       // Book the new slot and update appointment
       await newSlot.update({ status: SlotStatus.BOOKED, appointment_id: appointment.id }, { transaction: t });
+      // Keep CONFIRMED — RESCHEDULED is a terminal/done state that hides the
+      // appointment from the patient's active list. The new slot is still bookable.
       await appointment.update({
-        slot_id:              newSlotId,
-        scheduled_at:         newSlot.slot_datetime,
-        status:               AppointmentStatus.RESCHEDULED,
-        cancellation_reason:  reason ?? null,
+        slot_id:             newSlotId,
+        scheduled_at:        newSlot.slot_datetime,
+        status:              AppointmentStatus.CONFIRMED,
+        cancellation_reason: reason ?? null,
       }, { transaction: t });
 
       return appointment;

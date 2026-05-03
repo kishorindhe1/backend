@@ -353,7 +353,7 @@ export async function joinQueueFromApp(
   if (session.tokens_issued >= session.total_tokens) return fail('SESSION_FULL', 'Queue is full for today. Please try again later.', 409);
 
   // Prevent duplicate — patient already in today's queue for this doctor
-  const existing = await ConsultationQueue.findOne({
+  const existingQueue = await ConsultationQueue.findOne({
     where: {
       doctor_id:  doctorId,
       patient_id: patientId,
@@ -361,7 +361,18 @@ export async function joinQueueFromApp(
       status:     { [Op.in]: [QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.IN_CONSULTATION] },
     },
   });
-  if (existing) return fail('ALREADY_IN_QUEUE', 'You are already in this doctor\'s queue today.', 409);
+  if (existingQueue) return fail('ALREADY_IN_QUEUE', 'You are already in this doctor\'s queue today.', 409);
+
+  // Also prevent duplicate if patient has a CONFIRMED slot booking today (different path, same problem)
+  const existingAppt = await Appointment.findOne({
+    where: {
+      patient_id: patientId,
+      doctor_id:  doctorId,
+      status:     { [Op.in]: [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING, AppointmentStatus.AWAITING_HOSPITAL_APPROVAL] },
+      scheduled_at: { [Op.between]: [new Date(`${today}T00:00:00`), new Date(`${today}T23:59:59`)] },
+    },
+  });
+  if (existingAppt) return fail('ALREADY_BOOKED', 'You already have an active booking with this doctor today.', 409);
 
   const affiliation = await DoctorHospitalAffiliation.findOne({
     where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true },
