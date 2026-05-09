@@ -100,7 +100,7 @@ router.get('/doctors',
   asyncHandler(async (req: Request, res: Response) => {
     const scopeId = scopedHospitalId(req);
     const result  = await AdminService.listDoctorsScoped({
-      hospital_id:         scopeId,
+      hospital_id:         scopeId ?? (qs(req, 'hospital_id') || undefined),
       verification_status: qs(req, 'verification_status') || undefined,
       page:  page(req),
       perPage: perPg(req),
