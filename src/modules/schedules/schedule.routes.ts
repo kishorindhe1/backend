@@ -84,6 +84,41 @@ async function unblockSlotHandler(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+const SessionDefSchema = z.object({
+  name:         z.string().min(1).max(30),
+  start_time:   z.string().regex(/^\d{2}:\d{2}$/),
+  max_patients: z.number().int().min(1).max(500),
+  online_limit: z.number().int().min(0),
+  walkin_limit: z.number().int().min(0),
+});
+
+const QueueConfigSchema = z.object({
+  params: z.object({ scheduleId: z.string().uuid() }),
+  body: z.object({
+    opd_booking_mode: z.enum(['slot_based', 'token_based']),
+    sessions_config: z.object({
+      sessions:                   z.array(SessionDefSchema).min(1).max(5),
+      avg_consultation_minutes:   z.number().int().min(1).max(120).optional(),
+      break_after_n_patients:     z.number().int().min(1).nullable().optional(),
+    }).nullable().optional(),
+  }),
+});
+
+async function updateQueueConfig(req: Request, res: Response): Promise<void> {
+  const { scheduleId }      = req.params as { scheduleId: string };
+  const { opd_booking_mode, sessions_config } = req.body as {
+    opd_booking_mode: 'slot_based' | 'token_based';
+    sessions_config?: import('../../models').SessionsConfig | null;
+  };
+  const result = await ScheduleService.updateQueueConfig(
+    scheduleId,
+    opd_booking_mode as import('../../models').OpdBookingModeConfig,
+    sessions_config ?? null,
+  );
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 
@@ -109,6 +144,15 @@ router.get(
   requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST),
   validate(GetSlotsSchema),
   asyncHandler(getAdminSlots),
+);
+
+// Configure queue-based booking mode and session layout
+router.patch(
+  '/:scheduleId/queue-config',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(QueueConfigSchema),
+  asyncHandler(updateQueueConfig),
 );
 
 // Protected — deactivate a schedule

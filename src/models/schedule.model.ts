@@ -26,6 +26,26 @@ export enum ScheduleBookingMode {
   GAP_BASED   = 'gap_based',
 }
 
+export enum OpdBookingModeConfig {
+  SLOT_BASED  = 'slot_based',
+  TOKEN_BASED = 'token_based',
+}
+
+// Shape of sessions_config JSONB for token_based schedules
+export interface SessionDef {
+  name:         string;   // 'morning' | 'evening' | 'afternoon'
+  start_time:   string;   // 'HH:MM'
+  max_patients: number;
+  online_limit: number;
+  walkin_limit: number;
+}
+
+export interface SessionsConfig {
+  sessions:                  SessionDef[];
+  avg_consultation_minutes?: number;       // default 10
+  break_after_n_patients?:   number | null;
+}
+
 export class Schedule extends Model<
   InferAttributes<Schedule>,
   InferCreationAttributes<Schedule>
@@ -42,6 +62,8 @@ export class Schedule extends Model<
   declare effective_from:          Date;
   declare effective_until:         Date | null;
   declare booking_mode:            CreationOptional<ScheduleBookingMode>;
+  declare opd_booking_mode:        CreationOptional<OpdBookingModeConfig>;
+  declare sessions_config:         SessionsConfig | null;
   declare buffer_minutes:          CreationOptional<number>;
   declare end_buffer_minutes:      CreationOptional<number>;
   declare emergency_reserve_slots: CreationOptional<number>;
@@ -72,6 +94,11 @@ Schedule.init(
       type: DataTypes.ENUM(...Object.values(ScheduleBookingMode)),
       allowNull: false, defaultValue: ScheduleBookingMode.FIXED_SLOTS,
     },
+    opd_booking_mode: {
+      type: DataTypes.ENUM(...Object.values(OpdBookingModeConfig)),
+      allowNull: false, defaultValue: OpdBookingModeConfig.SLOT_BASED,
+    },
+    sessions_config: { type: DataTypes.JSONB, allowNull: true, defaultValue: null },
     buffer_minutes:          { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     end_buffer_minutes:      { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     emergency_reserve_slots: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 },

@@ -9,9 +9,12 @@ const qs    = (req: Request, k: string, d: string) => String((req.query as Recor
 
 export async function bookAppointment(req: Request, res: Response): Promise<void> {
   const user = req.user as JwtAccessPayload;
-  const { doctor_id, hospital_id, slot_id, notes, appointment_type, payment_mode } = req.body as Record<string,string>;
+  const { doctor_id, hospital_id, slot_id, session_id, notes, appointment_type, payment_mode } = req.body as Record<string,string>;
   const result = await AppointmentService.bookAppointment({
-    patient_id: user.sub, doctor_id, hospital_id, slot_id, notes,
+    patient_id: user.sub, doctor_id, hospital_id,
+    slot_id:    slot_id    || undefined,
+    session_id: session_id || undefined,
+    notes,
     payment_mode: payment_mode as PaymentMode | undefined,
   });
   handleResult(res, result, (data) => sendCreated(res, data));

@@ -3,6 +3,7 @@ import { sequelize }                     from '../../config/database';
 import { redis, RedisKeys, RedisTTL }    from '../../config/redis';
 import {
   OpdSlotSession, OpdSlotStatus,
+  OpdSession, OpdSessionStatus, OpdBookingMode,
   Appointment, AppointmentStatus, PaymentStatus,
   AppointmentType, PaymentMode, CancellationBy,
   DoctorProfile,
@@ -34,14 +35,192 @@ export interface BookAppointmentInput {
   patient_id:        string;
   doctor_id:         string;
   hospital_id:       string;
-  slot_id:           string;
+  slot_id?:          string;    // slot-based booking
+  session_id?:       string;    // token/queue-based booking (mutually exclusive with slot_id)
   notes?:            string;
   appointment_type?: AppointmentType;
   payment_mode?:     PaymentMode; // only honoured when hospital.payment_collection_mode = 'patient_choice'
 }
 
+// ── Queue-based booking (token mode) ─────────────────────────────────────────
+async function bookQueueAppointment(input: BookAppointmentInput): Promise<ServiceResponse<object>> {
+  const { patient_id, doctor_id, hospital_id, session_id, notes } = input;
+
+  const lockKey = `lock:opd:session:${session_id}`;
+  const lockVal = `${patient_id}-${Date.now()}`;
+  const acquired = await redis.set(lockKey, lockVal, 'EX', 10, 'NX');
+  if (!acquired) throw ErrorFactory.conflict('SESSION_LOCK', 'Session is busy, please retry in a moment.');
+
+  try {
+    const session = await OpdSession.findByPk(session_id!);
+    if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Queue session not found.');
+    if (session.booking_mode !== OpdBookingMode.TOKEN_BASED) {
+      throw ErrorFactory.unprocessable('NOT_QUEUE_SESSION', 'This session does not use queue-based booking.');
+    }
+    if (![OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE].includes(session.status as OpdSessionStatus)) {
+      throw ErrorFactory.unprocessable('SESSION_UNAVAILABLE', `Session is ${session.status} and not accepting bookings.`);
+    }
+    if (session.tokens_issued >= session.online_token_limit) {
+      throw ErrorFactory.conflict('SESSION_FULL', 'Online tokens for this session are fully booked.');
+    }
+
+    // One active token per patient per session
+    const existingToken = await OpdToken.findOne({
+      where: {
+        session_id: session_id!,
+        patient_id,
+        status: { [Op.notIn]: [OpdTokenStatus.CANCELLED, OpdTokenStatus.NO_SHOW] },
+      },
+    });
+    if (existingToken) {
+      throw ErrorFactory.conflict('ALREADY_IN_QUEUE', `You already have token #${existingToken.token_number} in this session.`);
+    }
+
+    const hospital = await Hospital.findByPk(hospital_id, { attributes: ['appointment_approval', 'payment_collection_mode'] });
+    if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
+    const isAutoApproval = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
+
+    // Booking preference checks — treat session start as the appointment time
+    const pref = await DoctorBookingPreference.findOne({ where: { doctor_id, hospital_id } });
+    if (pref) {
+      const slotTime = new Date(`${session.session_date}T${session.start_time}:00`).getTime();
+      const now      = Date.now();
+      if (pref.min_booking_lead_hours > 0 && slotTime - now < pref.min_booking_lead_hours * 3_600_000) {
+        throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
+      }
+      if (pref.booking_cutoff_hours > 0 && slotTime - now < pref.booking_cutoff_hours * 3_600_000) {
+        throw ErrorFactory.unprocessable('BOOKING_PAST_CUTOFF', `Bookings close ${pref.booking_cutoff_hours}h before the session.`);
+      }
+    }
+
+    let resolvedPaymentMode: PaymentMode;
+    if (hospital.payment_collection_mode === PaymentCollectionMode.CASH_ONLY) {
+      resolvedPaymentMode = PaymentMode.CASH;
+    } else if (hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE && input.payment_mode) {
+      resolvedPaymentMode = input.payment_mode;
+    } else {
+      resolvedPaymentMode = PaymentMode.ONLINE_PREPAID;
+    }
+
+    const scheduledAt = new Date(`${session.session_date}T${session.start_time}:00`);
+
+    const { appointment, tokenNumber } = await sequelize.transaction(async (t) => {
+      // Re-check capacity inside transaction
+      const locked = await OpdSession.findOne({
+        where: { id: session_id! },
+        lock: t.LOCK.UPDATE, transaction: t,
+      });
+      if (!locked || locked.tokens_issued >= locked.online_token_limit) {
+        throw ErrorFactory.conflict('SESSION_FULL', 'Session just filled up. Please try another session.');
+      }
+
+      const affiliation = await DoctorHospitalAffiliation.findOne({
+        where: { doctor_id, hospital_id, is_active: true }, transaction: t,
+      });
+      if (!affiliation) throw ErrorFactory.unprocessable('DOCTOR_NOT_AFFILIATED', 'Doctor is not affiliated with this hospital.');
+
+      const fee    = Number(affiliation.consultation_fee);
+      const splits = calcFee(fee);
+
+      const isCashOrCard    = resolvedPaymentMode === PaymentMode.CASH || resolvedPaymentMode === PaymentMode.CARD;
+      const doctorNeedsApproval = pref?.requires_booking_approval === true;
+      let initialStatus: AppointmentStatus;
+      if (!isAutoApproval || doctorNeedsApproval) {
+        initialStatus = AppointmentStatus.AWAITING_HOSPITAL_APPROVAL;
+      } else if (isCashOrCard) {
+        initialStatus = AppointmentStatus.CONFIRMED;
+      } else {
+        initialStatus = AppointmentStatus.PENDING;
+      }
+
+      const appt = await Appointment.create({
+        patient_id, doctor_id, hospital_id,
+        slot_id:          null,
+        scheduled_at:     scheduledAt,
+        status:           initialStatus,
+        payment_status:   PaymentStatus.PENDING,
+        appointment_type: input.appointment_type ?? AppointmentType.ONLINE_BOOKING,
+        payment_mode:     resolvedPaymentMode,
+        consultation_fee: fee,
+        platform_fee:     splits.platform_fee,
+        doctor_payout:    splits.doctor_payout,
+        notes:            notes ?? null,
+        cancellation_reason: null, cancelled_by: null, cancelled_at: null,
+        razorpay_order_id: null,
+      }, { transaction: t });
+
+      const maxToken = (await OpdToken.max('token_number', { where: { session_id: session_id! }, transaction: t }) as number | null) ?? 0;
+      const newTokenNumber = maxToken + 1;
+
+      await OpdToken.create({
+        session_id:                    session_id!,
+        token_number:                  newTokenNumber,
+        patient_id,
+        appointment_id:                appt.id,
+        token_type:                    OpdTokenType.ONLINE,
+        issued_by:                     'online_booking',
+        arrived_at:                    null, called_at: null,
+        consultation_start:            null, consultation_end: null,
+        status:                        OpdTokenStatus.ISSUED,
+        personalized_duration_minutes: null,
+        duration_override:             null,
+      }, { transaction: t });
+
+      await locked.update({ tokens_issued: locked.tokens_issued + 1 }, { transaction: t });
+
+      return { appointment: appt, tokenNumber: newTokenNumber };
+    });
+
+    await addToQueue(appointment.id, doctor_id, hospital_id, patient_id, scheduledAt);
+
+    const doctor = await DoctorProfile.findByPk(doctor_id, { attributes: ['full_name'] });
+    const pendingAhead     = Math.max(0, session.tokens_issued - session.current_token);
+    const estimatedWait    = pendingAhead * Number(session.avg_time_per_patient);
+
+    await enqueueNotification({
+      userId:        patient_id,
+      appointmentId: appointment.id,
+      type:          isAutoApproval ? 'booking_confirmed' : 'booking_awaiting_approval',
+      channels:      [NotificationChannel.SMS, NotificationChannel.PUSH],
+      priority:      'high',
+      data: {
+        name:   'Patient',
+        doctor: doctor?.full_name ?? 'Doctor',
+        date:   scheduledAt.toDateString(),
+        time:   session.start_time,
+        token:  String(tokenNumber),
+      },
+    });
+
+    await incrementCounter('bookings');
+    logger.info('Queue appointment booked', { appointmentId: appointment.id, patientId: patient_id, tokenNumber });
+
+    return ok({
+      appointment_id:          appointment.id,
+      status:                  appointment.status,
+      payment_status:          appointment.payment_status,
+      scheduled_at:            appointment.scheduled_at,
+      consultation_fee:        Number(appointment.consultation_fee),
+      platform_fee:            Number(appointment.platform_fee),
+      doctor_payout:           Number(appointment.doctor_payout),
+      razorpay_order_id:       null,
+      token_number:            tokenNumber,
+      session_id:              session_id!,
+      session_type:            session.session_type,
+      estimated_wait_minutes:  estimatedWait,
+    });
+
+  } finally {
+    const cur = await redis.get(lockKey);
+    if (cur === lockVal) await redis.del(lockKey);
+  }
+}
+
 export async function bookAppointment(input: BookAppointmentInput): Promise<ServiceResponse<object>> {
+  if (input.session_id && !input.slot_id) return bookQueueAppointment(input);
+
   const { patient_id, doctor_id, hospital_id, slot_id, notes } = input;
+  if (!slot_id) throw ErrorFactory.unprocessable('MISSING_SLOT', 'Either slot_id or session_id is required.');
 
   // Layer 1 — Redis distributed lock
   const lockKey = `lock:slot:${slot_id}`;

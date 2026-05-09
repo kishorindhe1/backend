@@ -103,7 +103,39 @@ async function listSessions(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+const GenerateSessionsSchema = z.object({
+  body: z.object({
+    doctor_id:   z.string().uuid(),
+    hospital_id: z.string().uuid(),
+    date:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+});
+
+const AvailableSessionsSchema = z.object({
+  query: z.object({
+    doctor_id:   z.string().uuid(),
+    hospital_id: z.string().uuid(),
+    date:        z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+});
+
 const router = Router();
+
+// Public — patient sees available queue sessions before booking
+router.get('/available', validate(AvailableSessionsSchema), asyncHandler(async (req: Request, res: Response) => {
+  const { doctor_id, hospital_id, date } = req.query as { doctor_id: string; hospital_id: string; date: string };
+  const result = await OpdService.listAvailableSessions(doctor_id, hospital_id, date);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
+
+// Admin — generate queue sessions for a date from schedule config
+router.post('/generate', authenticate, requireRole(...STAFF), validate(GenerateSessionsSchema), asyncHandler(async (req: Request, res: Response) => {
+  const { doctor_id, hospital_id, date } = req.body as { doctor_id: string; hospital_id: string; date: string };
+  const result = await OpdService.generateSessionsFromSchedule(doctor_id, hospital_id, date);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}));
 
 // List sessions
 router.get('/',                          authenticate, requireRole(...STAFF), asyncHandler(listSessions));

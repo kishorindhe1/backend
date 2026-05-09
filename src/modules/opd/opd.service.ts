@@ -9,7 +9,9 @@ import {
   Appointment, AppointmentStatus, AppointmentType, PaymentMode, PaymentStatus,
   ConsultationQueue, QueueStatus,
   DoctorHospitalAffiliation,
+  Schedule, OpdBookingModeConfig,
 }                                   from '../../models';
+import type { SessionsConfig, SessionDef } from '../../models';
 import { ErrorFactory }             from '../../utils/errors';
 import { ServiceResponse, ok }      from '../../types';
 import { logger }                   from '../../utils/logger';
@@ -516,6 +518,137 @@ async function updateSessionAvg(session: OpdSession, token: OpdToken): Promise<v
   const oldAvg = Number(session.avg_time_per_patient);
   const newAvg = Math.round((oldAvg * 0.85 + dur * 0.15) * 100) / 100;
   await session.update({ avg_time_per_patient: newAvg });
+}
+
+// ── Queue session helpers ─────────────────────────────────────────────────────
+
+function dateToDayOfWeek(date: string): string {
+  const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  return days[new Date(date + 'T12:00:00').getDay()];
+}
+
+function addMinutesToTime(startTime: string, minutes: number): string {
+  const [h, m] = startTime.split(':').map(Number);
+  const total = h * 60 + m + minutes;
+  return `${String(Math.floor(total / 60) % 24).padStart(2,'0')}:${String(total % 60).padStart(2,'0')}`;
+}
+
+// ── Generate queue sessions from schedule config (admin) ─────────────────────
+// Creates OpdSession records for a date based on the schedule's sessions_config.
+// Idempotent — skips sessions that already exist.
+export async function generateSessionsFromSchedule(
+  doctor_id:   string,
+  hospital_id: string,
+  date:        string,  // YYYY-MM-DD
+): Promise<ServiceResponse<object[]>> {
+  const dayOfWeek = dateToDayOfWeek(date);
+  const schedule = await Schedule.findOne({
+    where: {
+      doctor_id,
+      hospital_id,
+      day_of_week:      dayOfWeek,
+      opd_booking_mode: OpdBookingModeConfig.TOKEN_BASED,
+      is_active:        true,
+    },
+  });
+  if (!schedule) {
+    throw ErrorFactory.notFound('SCHEDULE_NOT_FOUND',
+      'No active token-based schedule found for this doctor on this day.');
+  }
+
+  const config   = schedule.sessions_config as SessionsConfig | null;
+  const avgMins  = config?.avg_consultation_minutes ?? 10;
+  let sessions: SessionDef[];
+
+  if (config?.sessions && config.sessions.length > 0) {
+    sessions = config.sessions;
+  } else {
+    // Fall back to single session covering the full schedule window
+    const onlineLimit = Math.floor(schedule.max_patients * 0.7);
+    sessions = [{
+      name:         dateToDayOfWeek(date) === 'sunday' ? 'morning' :
+                    parseInt(schedule.start_time, 10) < 12 ? 'morning' : 'evening',
+      start_time:   schedule.start_time,
+      max_patients: schedule.max_patients,
+      online_limit: onlineLimit,
+      walkin_limit: schedule.max_patients - onlineLimit,
+    }];
+  }
+
+  const created: object[] = [];
+  for (const sess of sessions) {
+    const existing = await OpdSession.findOne({
+      where: { doctor_id, hospital_id, session_date: date, session_type: sess.name },
+    });
+    if (existing) { created.push(existing.toJSON()); continue; }
+
+    const session = await OpdSession.create({
+      doctor_id,
+      hospital_id,
+      schedule_id:         schedule.id,
+      session_date:        date,
+      session_type:        sess.name,
+      booking_mode:        OpdBookingMode.TOKEN_BASED,
+      start_time:          sess.start_time,
+      expected_end_time:   addMinutesToTime(sess.start_time, sess.max_patients * avgMins),
+      total_tokens:        sess.max_patients,
+      online_token_limit:  sess.online_limit,
+      walkin_token_limit:  sess.walkin_limit,
+      tokens_issued:       0,
+      current_token:       0,
+      avg_time_per_patient: avgMins,
+      status:              OpdSessionStatus.SCHEDULED,
+    });
+    created.push(session.toJSON());
+  }
+
+  logger.info('Queue sessions generated', { doctor_id, hospital_id, date, count: created.length });
+  return ok(created);
+}
+
+// ── List available queue sessions for patient booking (public) ────────────────
+// Returns token-based sessions for a date with live availability and wait estimates.
+export async function listAvailableSessions(
+  doctor_id:   string,
+  hospital_id: string,
+  date:        string,
+): Promise<ServiceResponse<object[]>> {
+  const sessions = await OpdSession.findAll({
+    where: {
+      doctor_id,
+      hospital_id,
+      session_date: date,
+      booking_mode: OpdBookingMode.TOKEN_BASED,
+      status: { [Op.in]: [OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE, OpdSessionStatus.PAUSED] },
+    },
+    order: [['start_time', 'ASC']],
+  });
+
+  const result = sessions.map((s) => {
+    const issued            = s.tokens_issued ?? 0;
+    const current           = s.current_token ?? 0;
+    const avgMins           = Number(s.avg_time_per_patient);
+    const pendingAhead      = Math.max(0, issued - current);
+    const estimatedWait     = pendingAhead * avgMins;
+    const onlineRemaining   = Math.max(0, s.online_token_limit - issued);
+
+    return {
+      session_id:              s.id,
+      session_type:            s.session_type,
+      start_time:              s.start_time,
+      expected_end_time:       s.expected_end_time,
+      total_tokens:            s.total_tokens,
+      tokens_issued:           issued,
+      online_tokens_remaining: onlineRemaining,
+      current_token:           current,
+      avg_time_per_patient:    avgMins,
+      estimated_wait_minutes:  estimatedWait,
+      status:                  s.status,
+      is_available:            onlineRemaining > 0 && s.status !== OpdSessionStatus.PAUSED,
+    };
+  });
+
+  return ok(result);
 }
 
 // ── Session breaks ────────────────────────────────────────────────────────────

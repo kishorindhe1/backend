@@ -1,4 +1,5 @@
-import { Schedule, DayOfWeek }           from '../../models';
+import { Schedule, DayOfWeek, OpdBookingModeConfig } from '../../models';
+import type { SessionsConfig } from '../../models';
 import { OpdSlotSession, OpdSlotStatus } from '../../models';
 import { redis, RedisKeys, RedisTTL }    from '../../config/redis';
 import { ServiceResponse, ok, fail }     from '../../types';
@@ -96,6 +97,35 @@ export async function deactivateSchedule(
 
   logger.info('Schedule deactivated', { scheduleId });
   return ok({ message: 'Schedule deactivated successfully.' });
+}
+
+// ── Configure queue-based booking on a schedule ───────────────────────────────
+// Admin sets opd_booking_mode to token_based and defines session layout.
+export async function updateQueueConfig(
+  scheduleId:    string,
+  opdBookingMode: OpdBookingModeConfig,
+  sessionsConfig: SessionsConfig | null,
+): Promise<ServiceResponse<object>> {
+  const schedule = await Schedule.findByPk(scheduleId);
+  if (!schedule) return fail('SCHEDULE_NOT_FOUND', 'Schedule not found.', 404);
+
+  if (opdBookingMode === OpdBookingModeConfig.TOKEN_BASED && sessionsConfig) {
+    for (const s of sessionsConfig.sessions) {
+      if (s.online_limit + s.walkin_limit > s.max_patients) {
+        return fail('INVALID_SESSIONS_CONFIG',
+          `Session "${s.name}": online_limit + walkin_limit exceeds max_patients.`, 422);
+      }
+    }
+  }
+
+  await schedule.update({
+    opd_booking_mode: opdBookingMode,
+    sessions_config:  opdBookingMode === OpdBookingModeConfig.TOKEN_BASED ? (sessionsConfig ?? null) : null,
+  });
+
+  await redis.del(RedisKeys.doctorSchedule(schedule.doctor_id));
+  logger.info('Schedule queue config updated', { scheduleId, opdBookingMode });
+  return ok(schedule.toJSON());
 }
 
 // ── Block a slot (doctor leave, holiday) ─────────────────────────────────────

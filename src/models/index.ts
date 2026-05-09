@@ -30,7 +30,8 @@ export { PatientDoctorDurationHistory }                    from './patient-docto
 
 // ── Tier 3 ────────────────────────────────────────────────────────────────────
 export { DoctorHospitalAffiliation, EmploymentType, SlotAutonomyLevel } from './doctor-affiliation.model';
-export { Schedule, DayOfWeek, SessionType, ScheduleBookingMode } from './schedule.model';
+export { Schedule, DayOfWeek, SessionType, ScheduleBookingMode, OpdBookingModeConfig } from './schedule.model';
+export type { SessionDef, SessionsConfig } from './schedule.model';
 
 // ── Tier 4 ────────────────────────────────────────────────────────────────────
 export { OpdSlotSession, OpdSlotStatus, SlotCategory, BookingEngine, SlotType } from './opd-slot-session.model';
