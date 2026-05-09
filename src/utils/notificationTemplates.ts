@@ -253,6 +253,27 @@ export const templates: Record<string, TemplateSet> = {
     ),
   },
 
+  // ── Token called — patient's turn NOW ────────────────────────────────────
+  token_called: {
+    subject: `Token #{{token}} — Your Turn Now – ${BRAND.name}`,
+    sms: `Hi {{name}}, Token #{{token}} is now being called by Dr. {{doctor}} at {{hospital}}. Please proceed to the consultation room. -UPCHARIFY`,
+    html: (d) => layout(
+      'Your Token is Being Called!',
+      `Token #${d.token} — please proceed to the consultation room now.`,
+      `
+      ${greenBox(`&#128680;&nbsp; Token <strong>#${d.token}</strong> — It's Your Turn!`)}
+      ${h1('Please Proceed to the Consultation Room')}
+      ${detailTable([
+        ['Patient',    String(d.name)],
+        ['Doctor',     `Dr. ${d.doctor}`],
+        ['Hospital',   String(d.hospital)],
+        ['Token No.',  `#${d.token}`],
+      ])}
+      ${p('Head to the consultation room now. Delays may result in your token being skipped.')}
+    `,
+    ),
+  },
+
   // ── Queue position alert ──────────────────────────────────────────────────
   queue_position_alert: {
     subject: `Your Turn is Approaching – ${BRAND.name}`,

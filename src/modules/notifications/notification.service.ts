@@ -36,6 +36,7 @@ const BYPASS_QUIET_HOURS: Record<string, boolean> = {
   booking_cancelled_patient:    false,
   doctor_late:                  false,
   doctor_absent:                true,
+  token_called:                 true,   // time-critical — patient must proceed immediately
   queue_position_alert:         false,
   payment_successful:           false,
   refund_initiated:             false,

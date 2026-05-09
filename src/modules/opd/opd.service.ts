@@ -10,12 +10,15 @@ import {
   ConsultationQueue, QueueStatus,
   DoctorHospitalAffiliation,
   Schedule, OpdBookingModeConfig,
+  User, PatientProfile,
 }                                   from '../../models';
 import type { SessionsConfig, SessionDef } from '../../models';
 import { ErrorFactory }             from '../../utils/errors';
 import { ServiceResponse, ok }      from '../../types';
 import { logger }                   from '../../utils/logger';
 import { getEffectiveDuration }     from '../duration/duration.service';
+import { enqueueNotification }      from '../notifications/notification.service';
+import { NotificationChannel }      from '../../models';
 
 // ── Create OPD session ────────────────────────────────────────────────────────
 export interface BreakInput {
@@ -356,6 +359,31 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
   await next.update({ status: OpdTokenStatus.CALLED, called_at: new Date() });
   await session.update({ current_token: next.token_number });
 
+  // Push notification — fire-and-forget, don't block the response
+  if (next.patient_id) {
+    const [doctor, hospital] = await Promise.all([
+      DoctorProfile.findByPk(session.doctor_id, { attributes: ['full_name'] }),
+      Hospital.findByPk(session.hospital_id, { attributes: ['name'] }),
+    ]);
+    const patient = await User.findByPk(next.patient_id, {
+      attributes: ['mobile'],
+      include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name'], required: false }],
+    });
+    const patientName = (patient?.get('patientProfile') as PatientProfile | undefined)?.full_name ?? 'Patient';
+    enqueueNotification({
+      userId:   next.patient_id,
+      type:     'token_called',
+      channels: [NotificationChannel.PUSH, NotificationChannel.SMS],
+      priority: 'critical',
+      data: {
+        name:     patientName,
+        token:    String(next.token_number),
+        doctor:   doctor?.full_name ?? 'Doctor',
+        hospital: hospital?.name ?? 'Hospital',
+      },
+    }).catch(() => {});
+  }
+
   return ok({ message: `Token #${next.token_number} called.`, token_number: next.token_number, patient_id: next.patient_id });
 }
 
@@ -450,20 +478,34 @@ export async function listTokens(sessionId: string): Promise<ServiceResponse<obj
   const tokens = await OpdToken.findAll({
     where:  { session_id: sessionId },
     order:  [['token_number', 'ASC']],
+    include: [{
+      model:    User,
+      as:       'patient',
+      attributes: ['mobile'],
+      required: false,
+      include:  [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name'], required: false }],
+    }],
   });
 
-  return ok(tokens.map((t) => ({
-    id:                 t.id,
-    token_number:       t.token_number,
-    patient_id:         t.patient_id,
-    token_type:         t.token_type,
-    status:             t.status,
-    issued_at:          t.issued_at,
-    arrived_at:         t.arrived_at,
-    called_at:          t.called_at,
-    consultation_start: t.consultation_start,
-    consultation_end:   t.consultation_end,
-  })));
+  return ok(tokens.map((t) => {
+    const user    = t.get('patient') as (User & { patientProfile?: PatientProfile }) | undefined;
+    const name    = (user?.get('patientProfile') as PatientProfile | undefined)?.full_name ?? null;
+    const mobile  = user?.mobile ?? null;
+    return {
+      id:                 t.id,
+      token_number:       t.token_number,
+      patient_id:         t.patient_id,
+      patient_name:       name,
+      patient_mobile:     mobile,
+      token_type:         t.token_type,
+      status:             t.status,
+      issued_at:          t.issued_at,
+      arrived_at:         t.arrived_at,
+      called_at:          t.called_at,
+      consultation_start: t.consultation_start,
+      consultation_end:   t.consultation_end,
+    };
+  }));
 }
 
 // ── Get session live stats ────────────────────────────────────────────────────

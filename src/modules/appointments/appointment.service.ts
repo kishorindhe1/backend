@@ -667,6 +667,47 @@ export async function acceptAppointment(
   const newStatus    = isCashOrCard ? AppointmentStatus.CONFIRMED : AppointmentStatus.PENDING;
   await appointment.update({ status: newStatus });
 
+  // If no OPD token exists yet, try to issue one from the matching session
+  let tokenNumber: number | null = null;
+  const existingToken = await OpdToken.findOne({ where: { appointment_id: appointmentId } });
+  if (!existingToken) {
+    const dateStr = appointment.scheduled_at.toISOString().split('T')[0];
+    const session = await OpdSession.findOne({
+      where: {
+        doctor_id:    appointment.doctor_id,
+        hospital_id:  appointment.hospital_id,
+        session_date: dateStr,
+        booking_mode: OpdBookingMode.TOKEN_BASED,
+        status:       { [Op.in]: [OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE] },
+      },
+      order: [['start_time', 'ASC']],
+    });
+    if (session) {
+      const lockKey = `lock:opd:session:${session.id}`;
+      const acquired = await redis.set(lockKey, appointmentId, 'EX', 10, 'NX');
+      if (acquired) {
+        try {
+          const maxTok = (await OpdToken.max('token_number', { where: { session_id: session.id } }) as number | null) ?? 0;
+          tokenNumber  = maxTok + 1;
+          await OpdToken.create({
+            session_id:    session.id,
+            token_number:  tokenNumber,
+            patient_id:    appointment.patient_id,
+            appointment_id: appointmentId,
+            token_type:    OpdTokenType.ONLINE,
+            issued_by:     'hospital_approval',
+            status:        OpdTokenStatus.ISSUED,
+          });
+          await session.update({ tokens_issued: session.tokens_issued + 1 });
+        } finally {
+          await redis.del(lockKey);
+        }
+      }
+    }
+  } else {
+    tokenNumber = existingToken.token_number;
+  }
+
   const doctor = await DoctorProfile.findByPk(appointment.doctor_id, { attributes: ['full_name'] });
   await enqueueNotification({
     userId:        appointment.patient_id,
@@ -679,12 +720,12 @@ export async function acceptAppointment(
       doctor: doctor?.full_name ?? 'Doctor',
       date:   appointment.scheduled_at.toDateString(),
       time:   appointment.scheduled_at.toTimeString().slice(0, 5),
-      token:  '—',
+      token:  tokenNumber ? String(tokenNumber) : '—',
     },
   });
 
-  logger.info('Appointment accepted by hospital', { appointmentId, hospitalId, newStatus });
-  return ok({ message: 'Appointment accepted successfully.' });
+  logger.info('Appointment accepted by hospital', { appointmentId, hospitalId, newStatus, tokenNumber });
+  return ok({ message: 'Appointment accepted successfully.', token_number: tokenNumber });
 }
 
 // ── Hospital: reject appointment ──────────────────────────────────────────────
