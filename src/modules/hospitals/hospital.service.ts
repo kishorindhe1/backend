@@ -86,6 +86,10 @@ export async function registerHospital(
 
   logger.info('Hospital registered', { hospitalId: hospital.id, adminMobile: input.admin_mobile });
 
+  _sendHospitalInvite(hospital.id, hospital.name).catch((err) =>
+    logger.error('Failed to send hospital invite email on registration', { hospitalId: hospital.id, err }),
+  );
+
   return ok({
     hospital_id:       hospital.id,
     name:              hospital.name,

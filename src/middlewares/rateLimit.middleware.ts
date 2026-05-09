@@ -42,6 +42,20 @@ function createLimiter(options: {
   });
 }
 
-export const globalRateLimiter  = createLimiter({ windowMs: env.RATE_LIMIT_WINDOW_MS, max: env.RATE_LIMIT_MAX_REQUESTS, keyPrefix: 'global', message: 'Too many requests. Please try again in 15 minutes.' });
+export const globalRateLimiter = rateLimit({
+  windowMs:        env.RATE_LIMIT_WINDOW_MS,
+  max:             env.RATE_LIMIT_MAX_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  // Skip rate limiting for authenticated requests — they are protected by auth middleware.
+  // Auth endpoints keep their own strict limiter (authRateLimiter).
+  skip: (req) => typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer '),
+  handler: (_req, res) => {
+    res.status(429).json({
+      success: false,
+      error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests. Please try again in 15 minutes.' },
+    });
+  },
+});
 export const authRateLimiter    = createLimiter({ windowMs: 15 * 60 * 1000, max: 5,  keyPrefix: 'auth',    message: 'Too many authentication attempts.' });
 export const bookingRateLimiter = createLimiter({ windowMs: 60 * 60 * 1000, max: 20, keyPrefix: 'booking', message: 'Too many booking attempts.' });
