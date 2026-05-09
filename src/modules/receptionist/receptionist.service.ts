@@ -8,7 +8,6 @@ import {
   DoctorHospitalAffiliation,
   DoctorProfile,
   PatientProfile, Gender,
-  GeneratedSlot, SlotStatus,
   OpdSlotSession, OpdSlotStatus,
   OpdSession, OpdSessionStatus,
   OpdToken, OpdTokenType, OpdTokenStatus,
@@ -474,7 +473,7 @@ async function cancelDoctorDayAppointments(doctorId: string, hospitalId: string,
     });
     // Free slot
     if (appt.slot_id) {
-      await GeneratedSlot.update({ status: SlotStatus.AVAILABLE, appointment_id: null }, { where: { id: appt.slot_id } });
+      await OpdSlotSession.update({ status: OpdSlotStatus.PUBLISHED, appointment_id: null }, { where: { id: appt.slot_id } });
     }
   }
 

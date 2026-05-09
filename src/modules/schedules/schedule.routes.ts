@@ -68,14 +68,6 @@ async function getAdminSlots(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
-async function triggerSlotGeneration(req: Request, res: Response): Promise<void> {
-  const { doctor_id, hospital_id, from_date, to_date } = req.body as {
-    doctor_id: string; hospital_id: string; from_date: string; to_date: string;
-  };
-  const result = await ScheduleService.generateSlotsForDoctor(doctor_id, hospital_id, from_date, to_date);
-  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
-  sendCreated(res, result.data);
-}
 
 async function blockSlotHandler(req: Request, res: Response): Promise<void> {
   const { slotId } = req.params as { slotId: string };
@@ -127,14 +119,6 @@ router.patch(
   asyncHandler(deactivateSchedule),
 );
 
-// Protected — hospital admin / super admin trigger slot generation
-router.post(
-  '/generate',
-  authenticate,
-  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
-  validate(GenerateSlotsSchema),
-  asyncHandler(triggerSlotGeneration),
-);
 
 // Block / unblock a slot (admin)
 router.patch(

@@ -4,7 +4,6 @@ import {
   OpdSlotSession, OpdSlotStatus,
   Appointment, AppointmentStatus, PaymentStatus, CancellationBy,
   NoShowLog,
-  GeneratedSlot, SlotStatus,
   DoctorProfile, Hospital,
 }                                      from '../../models';
 import { NotificationChannel }         from '../../models';
@@ -280,27 +279,11 @@ export async function markNoShow(
     marked_by:            markedBy,
   });
 
-  // Free the GeneratedSlot
-  if (appointment.slot_id) {
-    await GeneratedSlot.update(
-      { status: SlotStatus.AVAILABLE, appointment_id: null },
-      { where: { id: appointment.slot_id } },
-    );
-  }
-
-  // Find and free the OpdSlotSession
-  const date = appointment.scheduled_at.toISOString().split('T')[0];
-  const hhmm = `${String(appointment.scheduled_at.getHours()).padStart(2, '0')}:${String(appointment.scheduled_at.getMinutes()).padStart(2, '0')}`;
-
-  const opdSlot = await OpdSlotSession.findOne({
-    where: {
-      doctor_id:       appointment.doctor_id,
-      hospital_id:     appointment.hospital_id,
-      date,
-      slot_start_time: hhmm,
-      status:          OpdSlotStatus.BOOKED,
-    },
-  });
+  // Free the OpdSlotSession
+  const opdSlot = appointment.slot_id
+    ? await OpdSlotSession.findByPk(appointment.slot_id)
+    : null;
+  const date = opdSlot?.date ?? appointment.scheduled_at.toISOString().split('T')[0];
 
   let waitlistOffered = false;
   if (opdSlot) {
@@ -317,7 +300,6 @@ export async function markNoShow(
   }
 
   // Invalidate caches
-  await redis.del(RedisKeys.availableSlots(appointment.doctor_id, date));
   await redis.del(RedisKeys.publishedSlots(appointment.doctor_id, date));
 
   logger.info('No-show marked', { appointmentId, markedBy, waitlistOffered });

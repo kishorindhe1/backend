@@ -117,6 +117,27 @@ router.patch('/:sessionId/cancel',       authenticate, requireRole(...STAFF), va
 router.post ('/:sessionId/call-next',    authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(callNext));
 router.post ('/:sessionId/walkin-token', authenticate, requireRole(...STAFF), validate(WalkInTokenSchema),   asyncHandler(issueWalkInToken));
 
+// Breaks — staff only
+const AddBreakSchema = z.object({ params: z.object({ sessionId: z.string().uuid() }), body: z.object({ start_time: z.string().regex(/^\d{2}:\d{2}$/), end_time: z.string().regex(/^\d{2}:\d{2}$/), reason: z.string().max(100).optional() }) });
+const BreakIdSchema  = z.object({ params: z.object({ sessionId: z.string().uuid(), breakId: z.string().uuid() }) });
+
+router.get   ('/:sessionId/breaks',           authenticate, requireRole(...STAFF), validate(SessionIdSchema), asyncHandler(async (req: Request, res: Response) => {
+  const result = await OpdService.listBreaks(req.params.sessionId);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
+router.post  ('/:sessionId/breaks',           authenticate, requireRole(...STAFF), validate(AddBreakSchema), asyncHandler(async (req: Request, res: Response) => {
+  const { start_time, end_time, reason } = req.body as { start_time: string; end_time: string; reason?: string };
+  const result = await OpdService.addBreak(req.params.sessionId, start_time, end_time, reason);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}));
+router.delete('/:sessionId/breaks/:breakId',  authenticate, requireRole(...STAFF), validate(BreakIdSchema), asyncHandler(async (req: Request, res: Response) => {
+  const result = await OpdService.removeBreak(req.params.sessionId, req.params.breakId);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}));
+
 // Token list + stats — staff + doctor
 router.get  ('/:sessionId/tokens',       authenticate, requireRole(...STAFF), validate(SessionIdSchema), asyncHandler(getTokens));
 router.get  ('/:sessionId/stats',        authenticate, validate(SessionIdSchema), asyncHandler(getStats));

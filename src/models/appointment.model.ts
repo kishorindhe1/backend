@@ -112,7 +112,7 @@ Appointment.init(
     patient_id:  { type: DataTypes.UUID, allowNull: false, references: { model: 'users',            key: 'id' } },
     doctor_id:   { type: DataTypes.UUID, allowNull: false, references: { model: 'doctor_profiles',  key: 'id' } },
     hospital_id: { type: DataTypes.UUID, allowNull: false, references: { model: 'hospitals',        key: 'id' } },
-    slot_id:     { type: DataTypes.UUID, allowNull: true,  references: { model: 'generated_slots',  key: 'id' } },
+    slot_id:     { type: DataTypes.UUID, allowNull: true,  references: { model: 'opd_slot_sessions', key: 'id' } },
 
     scheduled_at: { type: DataTypes.DATE, allowNull: false },
     status: {

@@ -6,7 +6,7 @@ import {
   DoctorProfile, VerificationStatus,
   DoctorHospitalAffiliation,
   Hospital, OnboardingStatus,
-  GeneratedSlot, SlotStatus,
+  OpdSlotSession, OpdSlotStatus,
   SymptomSpecialisationMap,
 }                           from '../../models';
 import { ServiceResponse, ok } from '../../types';
@@ -74,22 +74,15 @@ export async function rebuildDoctorIndex(doctorId: string, hospitalId: string): 
   const todayStart = new Date(`${today}T00:00:00.000Z`);
   const todayEnd   = new Date(`${today}T23:59:59.999Z`);
 
-  const slotsToday = await GeneratedSlot.count({
-    where: {
-      doctor_id: doctorId, hospital_id: hospitalId,
-      status: SlotStatus.AVAILABLE,
-      slot_datetime: { [Op.between]: [todayStart, todayEnd] },
-    },
+  const slotsToday = await OpdSlotSession.count({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, status: OpdSlotStatus.PUBLISHED, date: today },
   });
 
-  const nextSlot = await GeneratedSlot.findOne({
-    where: {
-      doctor_id: doctorId, hospital_id: hospitalId,
-      status: SlotStatus.AVAILABLE,
-      slot_datetime: { [Op.gt]: new Date() },
-    },
-    order: [['slot_datetime', 'ASC']],
+  const nextSlot = await OpdSlotSession.findOne({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, status: OpdSlotStatus.PUBLISHED, date: { [Op.gte]: today } },
+    order: [['date', 'ASC'], ['slot_start_time', 'ASC']],
   });
+  const nextSlotDatetime = nextSlot ? new Date(`${nextSlot.date}T${nextSlot.slot_start_time}:00`) : null;
 
   const normalized = doctor.full_name
     .toLowerCase()
@@ -115,7 +108,7 @@ export async function rebuildDoctorIndex(doctorId: string, hospitalId: string): 
       latitude:               hospital.latitude ? Number(hospital.latitude) : null,
       longitude:              hospital.longitude ? Number(hospital.longitude) : null,
       consultation_fee:       Number(affil.consultation_fee),
-      next_available_slot:    nextSlot?.slot_datetime ?? null,
+      next_available_slot:    nextSlotDatetime,
       available_today:        slotsToday > 0,
       available_slots_today:  slotsToday,
       avg_rating:             0,
@@ -136,7 +129,7 @@ export async function rebuildDoctorIndex(doctorId: string, hospitalId: string): 
       doctor_name_normalized: normalized,
       specialization:         doctor.specialization,
       consultation_fee:       Number(affil.consultation_fee),
-      next_available_slot:    nextSlot?.slot_datetime ?? null,
+      next_available_slot:    nextSlotDatetime,
       available_today:        slotsToday > 0,
       available_slots_today:  slotsToday,
       wilson_rating_score:    wilson,
@@ -176,23 +169,16 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
     if (!doctor || !hospital) continue;
 
     try {
-      const [slotsToday, nextSlot] = await Promise.all([
-        GeneratedSlot.count({
-          where: {
-            doctor_id: aff.doctor_id, hospital_id: aff.hospital_id,
-            status: SlotStatus.AVAILABLE,
-            slot_datetime: { [Op.between]: [todayStart, todayEnd] },
-          },
+      const [slotsToday, nextSlotRow] = await Promise.all([
+        OpdSlotSession.count({
+          where: { doctor_id: aff.doctor_id, hospital_id: aff.hospital_id, status: OpdSlotStatus.PUBLISHED, date: today },
         }),
-        GeneratedSlot.findOne({
-          where: {
-            doctor_id: aff.doctor_id, hospital_id: aff.hospital_id,
-            status: SlotStatus.AVAILABLE,
-            slot_datetime: { [Op.gt]: new Date() },
-          },
-          order: [['slot_datetime', 'ASC']],
+        OpdSlotSession.findOne({
+          where: { doctor_id: aff.doctor_id, hospital_id: aff.hospital_id, status: OpdSlotStatus.PUBLISHED, date: { [Op.gte]: today } },
+          order: [['date', 'ASC'], ['slot_start_time', 'ASC']],
         }),
       ]);
+      const nextSlot = nextSlotRow ? new Date(`${nextSlotRow.date}T${nextSlotRow.slot_start_time}:00`) : null;
 
       const normalized = doctor.full_name.toLowerCase().replace(/^dr\.?\s*/i, '').trim();
       const wilson     = wilsonScore(Number(doctor.reliability_score), 0);
@@ -214,7 +200,7 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
           latitude:               hospital.latitude ? Number(hospital.latitude) : null,
           longitude:              hospital.longitude ? Number(hospital.longitude) : null,
           consultation_fee:       Number(aff.consultation_fee),
-          next_available_slot:    nextSlot?.slot_datetime ?? null,
+          next_available_slot:    nextSlot ?? null,
           available_today:        slotsToday > 0,
           available_slots_today:  slotsToday,
           avg_rating:             0,
@@ -235,7 +221,7 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
           doctor_name_normalized: normalized,
           specialization:         doctor.specialization,
           consultation_fee:       Number(aff.consultation_fee),
-          next_available_slot:    nextSlot?.slot_datetime ?? null,
+          next_available_slot:    nextSlot ?? null,
           available_today:        slotsToday > 0,
           available_slots_today:  slotsToday,
           wilson_rating_score:    wilson,

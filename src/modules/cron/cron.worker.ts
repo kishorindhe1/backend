@@ -162,33 +162,6 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
       break;
     }
 
-    case 'generate_slots': {
-      const { DoctorHospitalAffiliation } = await import('../../models');
-      const { generateSlotsForDoctor }    = await import('../schedules/schedule.service');
-
-      const affiliations = await DoctorHospitalAffiliation.findAll({ where: { is_active: true } });
-      let generated = 0, errors = 0;
-
-      const today     = new Date();
-      const toDateObj = new Date(today);
-      toDateObj.setDate(today.getDate() + env.SLOT_GENERATION_DAYS_AHEAD);
-      const fromDate  = today.toISOString().split('T')[0];
-      const toDate    = toDateObj.toISOString().split('T')[0];
-
-      for (const aff of affiliations) {
-        try {
-          const result = await generateSlotsForDoctor(aff.doctor_id, aff.hospital_id, fromDate, toDate);
-          if (result.success) generated += result.data.generated;
-        } catch (err) {
-          errors++;
-          logger.error('Slot generation error', { doctorId: aff.doctor_id, err });
-        }
-      }
-
-      logger.info('Slot generation complete', { generated, errors });
-      break;
-    }
-
     case 'expire_waitlist_offers': {
       const { expireWaitlistOffers } = await import('../waitlist/waitlist.service');
       const result = await expireWaitlistOffers();
@@ -255,7 +228,7 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
 
     case 'expire_approval_timeouts': {
       const { sequelize: seq } = await import('../../config/database');
-      const { Appointment, AppointmentStatus, DoctorBookingPreference, GeneratedSlot, SlotStatus } = await import('../../models');
+      const { Appointment, AppointmentStatus, DoctorBookingPreference, OpdSlotSession, OpdSlotStatus } = await import('../../models');
       const { Op } = await import('sequelize');
 
       // Find appointments awaiting approval where doctor preference timeout has passed
@@ -283,7 +256,7 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
             await seq.transaction(async (t) => {
               await appt.update({ status: AppointmentStatus.CANCELLED, cancellation_reason: 'Approval timeout', cancelled_at: new Date() }, { transaction: t });
               if (appt.slot_id) {
-                await GeneratedSlot.update({ status: SlotStatus.AVAILABLE, appointment_id: null }, { where: { id: appt.slot_id }, transaction: t });
+                await OpdSlotSession.update({ status: OpdSlotStatus.PUBLISHED, appointment_id: null }, { where: { id: appt.slot_id }, transaction: t });
               }
             });
             expired++;
@@ -299,7 +272,7 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
 
     // ── Expire unpaid PENDING appointments after 30 min ──────────────────────
     case 'expire_pending_payments': {
-      const { Appointment, AppointmentStatus, PaymentStatus, CancellationBy, GeneratedSlot, SlotStatus } = await import('../../models');
+      const { Appointment, AppointmentStatus, PaymentStatus, CancellationBy, OpdSlotSession, OpdSlotStatus } = await import('../../models');
       const { Op } = await import('sequelize');
 
       const cutoff = new Date(Date.now() - 30 * 60_000); // 30 minutes ago
@@ -316,7 +289,7 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
       for (const appt of stale) {
         await appt.update({ status: AppointmentStatus.CANCELLED, cancellation_reason: 'Payment not completed within 30 minutes', cancelled_by: CancellationBy.SYSTEM, cancelled_at: new Date() });
         if (appt.slot_id) {
-          await GeneratedSlot.update({ status: SlotStatus.AVAILABLE, appointment_id: null }, { where: { id: appt.slot_id } });
+          await OpdSlotSession.update({ status: OpdSlotStatus.PUBLISHED, appointment_id: null }, { where: { id: appt.slot_id } });
         }
         freed++;
       }

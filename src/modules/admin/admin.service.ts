@@ -11,7 +11,7 @@ import {
   Appointment, AppointmentStatus, PaymentStatus,
   Payment, PaymentGatewayStatus,
   ConsultationQueue, QueueStatus,
-  GeneratedSlot, SlotStatus,
+  OpdSlotSession, OpdSlotStatus,
   DoctorDelayEvent, DelayStatus,
   NotificationLog, NotificationStatus,
   AdminAuditLog, AdminAction,
@@ -467,25 +467,26 @@ export async function rescheduleAppointmentAsAdmin(
 
   try {
     const result = await sequelize.transaction(async (t) => {
-      const newSlot = await GeneratedSlot.findOne({
+      const newSlot = await OpdSlotSession.findOne({
         where: { id: newSlotId, doctor_id: appointment.doctor_id, hospital_id: appointment.hospital_id },
         lock: t.LOCK.UPDATE, transaction: t,
       });
       if (!newSlot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'New slot not found.');
-      if (newSlot.status !== SlotStatus.AVAILABLE) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'Slot already booked.');
-      if (newSlot.slot_datetime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
+      if (newSlot.status !== OpdSlotStatus.PUBLISHED) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'Slot already booked.');
+      const newSlotDateTime = new Date(`${newSlot.date}T${newSlot.slot_start_time}:00`);
+      if (newSlotDateTime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
 
       if (appointment.slot_id) {
-        await GeneratedSlot.update(
-          { status: SlotStatus.AVAILABLE, appointment_id: null },
+        await OpdSlotSession.update(
+          { status: OpdSlotStatus.PUBLISHED, appointment_id: null },
           { where: { id: appointment.slot_id }, transaction: t },
         );
       }
 
-      await newSlot.update({ status: SlotStatus.BOOKED, appointment_id: appointment.id }, { transaction: t });
+      await newSlot.update({ status: OpdSlotStatus.BOOKED, appointment_id: appointment.id }, { transaction: t });
       await appointment.update({
         slot_id: newSlotId,
-        scheduled_at: newSlot.slot_datetime,
+        scheduled_at: newSlotDateTime,
         status: AppointmentStatus.RESCHEDULED,
         cancellation_reason: reason ?? null,
       }, { transaction: t });

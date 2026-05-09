@@ -5,6 +5,7 @@ import {
   HospitalClosure,
   DoctorAvailabilityOverride, OverrideType,
   OpdSlotSession, OpdSlotStatus, BookingEngine,
+  OpdSession, OpdSessionStatus,
   OpdReviewLog,
   ConsultationQueue, QueueStatus,
   DoctorDelayEvent, DelayStatus,
@@ -31,6 +32,12 @@ function parseTime(timeStr: string, baseDate: Date): Date {
 
 function toTimeStr(d: Date): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function deriveSessionType(startTime: string, endTime: string): string {
+  if (endTime <= '13:00') return 'morning';
+  if (startTime >= '13:00') return 'evening';
+  return 'full_day';
 }
 
 // ── Draft slots for a hospital on a specific date ────────────────────────────
@@ -70,8 +77,8 @@ export async function draftSlotsForDate(
   for (const aff of affiliations) {
     const doctorId = aff.doctor_id;
 
-    // 3. Find active schedule for this day
-    const schedule = await Schedule.findOne({
+    // 3. Find ALL active schedules for this doctor on this day
+    const schedules = await Schedule.findAll({
       where: {
         doctor_id:   doctorId,
         hospital_id: hospitalId,
@@ -83,106 +90,140 @@ export async function draftSlotsForDate(
           { effective_until: { [Op.gte]: targetDate } },
         ],
       },
+      order: [['start_time', 'ASC']],
     });
 
-    if (!schedule) {
+    if (!schedules.length) {
       skippedDoctors.push(doctorId);
       continue;
     }
 
-    // Gap-based doctors handled in Phase 6
-    if (schedule.booking_mode === ScheduleBookingMode.GAP_BASED) {
-      skippedDoctors.push(doctorId);
-      continue;
-    }
-
-    // 4. Fetch overrides for this doctor+date
+    // 4. Fetch overrides once per doctor for this date
     const overrides = await DoctorAvailabilityOverride.findAll({
       where: { doctor_id: doctorId, hospital_id: hospitalId, date },
     });
 
-    // day_off override → skip entirely
+    // day_off override → skip all schedules for this doctor
     const isDayOff = overrides.some((o) => o.override_type === OverrideType.DAY_OFF);
     if (isDayOff) {
       skippedDoctors.push(doctorId);
       continue;
     }
 
-    // 5. Build effective window from schedule + overrides
-    let windowStart = schedule.start_time;
-    let windowEnd   = schedule.end_time;
-
-    for (const override of overrides) {
-      if (override.override_type === OverrideType.LATE_START && override.start_time) {
-        // Push start forward if override is later
-        if (override.start_time > windowStart) windowStart = override.start_time;
-      }
-      if (override.override_type === OverrideType.EARLY_END && override.end_time) {
-        // Pull end earlier if override is sooner
-        if (override.end_time < windowEnd) windowEnd = override.end_time;
-      }
-    }
-
-    // Collect break windows
+    // Collect break windows and extra-hours windows (apply to all schedule blocks)
     const breaks: Array<{ start: string; end: string }> = overrides
       .filter((o) => o.override_type === OverrideType.BREAK && o.start_time && o.end_time)
       .map((o) => ({ start: o.start_time!, end: o.end_time! }));
 
-    // Apply partial hospital closure as a break
     if (partialBlockStart && partialBlockEnd) {
       breaks.push({ start: partialBlockStart, end: partialBlockEnd });
     }
 
-    // Extra hours override (additional window — generate after main window)
     const extraWindows: Array<{ start: string; end: string }> = overrides
       .filter((o) => o.override_type === OverrideType.EXTRA_HOURS && o.start_time && o.end_time)
       .map((o) => ({ start: o.start_time!, end: o.end_time! }));
 
-    // 6. Generate slots from the effective window
-    const slotsGenerated = await generateDraftSlots({
-      doctorId,
-      hospitalId,
-      scheduleId: schedule.id,
-      date,
-      targetDate,
-      windowStart,
-      windowEnd,
-      slotDurationMinutes: schedule.slot_duration_minutes,
-      bufferMinutes:       schedule.buffer_minutes,
-      maxPatients:         schedule.max_patients,
-      emergencyReserveSlots: schedule.emergency_reserve_slots,
-      breaks,
-    });
+    let doctorHadSlots = false;
 
-    // Extra hours windows
-    for (const extra of extraWindows) {
-      await generateDraftSlots({
+    // 5. Process each schedule block (e.g. morning + evening)
+    for (const schedule of schedules) {
+      // Gap-based doctors handled in Phase 6
+      if (schedule.booking_mode === ScheduleBookingMode.GAP_BASED) continue;
+
+      // Build effective window — apply LATE_START / EARLY_END overrides per block
+      let windowStart = schedule.start_time;
+      let windowEnd   = schedule.end_time;
+
+      for (const override of overrides) {
+        if (override.override_type === OverrideType.LATE_START && override.start_time) {
+          if (override.start_time > windowStart) windowStart = override.start_time;
+        }
+        if (override.override_type === OverrideType.EARLY_END && override.end_time) {
+          if (override.end_time < windowEnd) windowEnd = override.end_time;
+        }
+      }
+
+      // 6. Generate slots for this schedule block
+      const slotsGenerated = await generateDraftSlots({
         doctorId,
         hospitalId,
         scheduleId: schedule.id,
         date,
         targetDate,
-        windowStart:         extra.start,
-        windowEnd:           extra.end,
-        slotDurationMinutes: schedule.slot_duration_minutes,
-        bufferMinutes:       schedule.buffer_minutes,
-        maxPatients:         schedule.max_patients,
-        emergencyReserveSlots: 0,
-        breaks: [],
+        windowStart,
+        windowEnd,
+        slotDurationMinutes:  schedule.slot_duration_minutes,
+        bufferMinutes:        schedule.buffer_minutes,
+        maxPatients:          schedule.max_patients,
+        emergencyReserveSlots: schedule.emergency_reserve_slots,
+        breaks,
       });
+
+      // Extra hours windows attached to this schedule block
+      for (const extra of extraWindows) {
+        await generateDraftSlots({
+          doctorId,
+          hospitalId,
+          scheduleId: schedule.id,
+          date,
+          targetDate,
+          windowStart:          extra.start,
+          windowEnd:            extra.end,
+          slotDurationMinutes:  schedule.slot_duration_minutes,
+          bufferMinutes:        schedule.buffer_minutes,
+          maxPatients:          schedule.max_patients,
+          emergencyReserveSlots: 0,
+          breaks: [],
+        });
+      }
+
+      if (slotsGenerated > 0) {
+        doctorHadSlots = true;
+        totalSlots += slotsGenerated;
+
+        // Auto-create OpdSession for this schedule block
+        const [session] = await OpdSession.findOrCreate({
+          where: {
+            doctor_id:    doctorId,
+            hospital_id:  hospitalId,
+            session_date: date,
+            schedule_id:  schedule.id,
+          },
+          defaults: {
+            doctor_id:          doctorId,
+            hospital_id:        hospitalId,
+            session_date:       date,
+            schedule_id:        schedule.id,
+            session_type:       deriveSessionType(windowStart, windowEnd),
+            start_time:         windowStart,
+            expected_end_time:  windowEnd,
+            total_tokens:       slotsGenerated,
+            online_token_limit: slotsGenerated,
+            walkin_token_limit: schedule.emergency_reserve_slots,
+            status:             OpdSessionStatus.SCHEDULED,
+          },
+        });
+
+        // Link unlinked slots for this schedule block to the session
+        await OpdSlotSession.update(
+          { session_id: session.id },
+          { where: { doctor_id: doctorId, hospital_id: hospitalId, date, schedule_id: schedule.id, session_id: null } },
+        );
+
+        // FULL autonomy: auto-publish this schedule block's slots immediately
+        if (aff.slot_autonomy_level === SlotAutonomyLevel.FULL) {
+          await OpdSlotSession.update(
+            { status: OpdSlotStatus.PUBLISHED },
+            { where: { doctor_id: doctorId, hospital_id: hospitalId, date, schedule_id: schedule.id, status: OpdSlotStatus.DRAFT } },
+          );
+        }
+      }
     }
 
-    if (slotsGenerated > 0) {
+    if (doctorHadSlots) {
       doctorsDrafted++;
-      totalSlots += slotsGenerated;
-
-      // FULL autonomy doctors auto-publish immediately — no admin review required
-      if (aff.slot_autonomy_level === SlotAutonomyLevel.FULL) {
-        await OpdSlotSession.update(
-          { status: OpdSlotStatus.PUBLISHED },
-          { where: { doctor_id: doctorId, hospital_id: hospitalId, date, status: OpdSlotStatus.DRAFT } },
-        );
-      }
+    } else {
+      skippedDoctors.push(doctorId);
     }
   }
 

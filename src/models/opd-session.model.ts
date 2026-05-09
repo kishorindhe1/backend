@@ -25,6 +25,7 @@ export class OpdSession extends Model<
   declare id:                   CreationOptional<string>;
   declare doctor_id:            ForeignKey<string>;
   declare hospital_id:          ForeignKey<string>;
+  declare schedule_id:          ForeignKey<string> | null;
   declare session_date:         string;             // YYYY-MM-DD
   declare session_type:         string;             // 'morning' | 'evening' | 'full_day'
   declare booking_mode:         CreationOptional<OpdBookingMode>;
@@ -48,6 +49,7 @@ OpdSession.init(
     id:          { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
     doctor_id:   { type: DataTypes.UUID, allowNull: false, references: { model: 'doctor_profiles', key: 'id' } },
     hospital_id: { type: DataTypes.UUID, allowNull: false, references: { model: 'hospitals',       key: 'id' } },
+    schedule_id: { type: DataTypes.UUID, allowNull: true,  references: { model: 'schedules',       key: 'id' } },
     session_date:      { type: DataTypes.DATEONLY,   allowNull: false },
     session_type:      { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'morning' },
     booking_mode: {

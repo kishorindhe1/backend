@@ -33,7 +33,6 @@ export { DoctorHospitalAffiliation, EmploymentType, SlotAutonomyLevel } from './
 export { Schedule, DayOfWeek, SessionType, ScheduleBookingMode } from './schedule.model';
 
 // ── Tier 4 ────────────────────────────────────────────────────────────────────
-export { GeneratedSlot, SlotStatus }   from './slot.model';
 export { OpdSlotSession, OpdSlotStatus, SlotCategory, BookingEngine, SlotType } from './opd-slot-session.model';
 export { ProcedureType, ProcedureCategory }                           from './procedure-type.model';
 export { DoctorAvailabilityWindow, WindowBookingMode }                from './doctor-availability-window.model';
@@ -41,6 +40,7 @@ export { DoctorAvailabilityOverride, OverrideType }                   from './do
 export { DoctorBookingPreference }                                    from './doctor-booking-preference.model';
 export { HospitalClosure, ClosureType }                               from './hospital-closure.model';
 export { SlotTemplate, TemplateAppliesTo }                            from './slot-template.model';
+export { OpdSessionBreak }                                            from './opd-session-break.model';
 
 // ── Tier 5 ────────────────────────────────────────────────────────────────────
 export {
@@ -114,7 +114,6 @@ import { HospitalStaff }              from './hospital-staff.model';
 import { DoctorProfile }              from './doctor.model';
 import { DoctorHospitalAffiliation }  from './doctor-affiliation.model';
 import { Schedule }                   from './schedule.model';
-import { GeneratedSlot }              from './slot.model';
 import { Appointment }                from './appointment.model';
 import { Payment }                    from './payment.model';
 import { ConsultationQueue }          from './consultation-queue.model';
@@ -122,6 +121,7 @@ import { DoctorDelayEvent }           from './doctor-delay-event.model';
 import { NotificationLog }            from './notification-log.model';
 import { UserNotificationPreference } from './notification-preference.model';
 import { OpdSession }                 from './opd-session.model';
+import { OpdSessionBreak }            from './opd-session-break.model';
 import { OpdToken }                   from './opd-token.model';
 import { DoctorReview }              from './review.model';
 import { HealthRecord }              from './health-record.model';
@@ -155,9 +155,6 @@ DoctorHospitalAffiliation.belongsTo(Hospital, { foreignKey: 'hospital_id', as: '
 Hospital.hasMany(Schedule,                 { foreignKey: 'hospital_id', as: 'schedules' });
 Schedule.belongsTo(Hospital,                 { foreignKey: 'hospital_id', as: 'hospital' });
 
-Hospital.hasMany(GeneratedSlot,            { foreignKey: 'hospital_id', as: 'slots' });
-GeneratedSlot.belongsTo(Hospital,            { foreignKey: 'hospital_id', as: 'hospital' });
-
 Hospital.hasMany(Appointment,              { foreignKey: 'hospital_id', as: 'appointments' });
 Appointment.belongsTo(Hospital,              { foreignKey: 'hospital_id', as: 'hospital' });
 
@@ -171,9 +168,6 @@ DoctorHospitalAffiliation.belongsTo(DoctorProfile, { foreignKey: 'doctor_id', as
 DoctorProfile.hasMany(Schedule,            { foreignKey: 'doctor_id', as: 'schedules' });
 Schedule.belongsTo(DoctorProfile,            { foreignKey: 'doctor_id', as: 'doctor' });
 
-DoctorProfile.hasMany(GeneratedSlot,       { foreignKey: 'doctor_id', as: 'slots' });
-GeneratedSlot.belongsTo(DoctorProfile,       { foreignKey: 'doctor_id', as: 'doctor' });
-
 DoctorProfile.hasMany(Appointment,         { foreignKey: 'doctor_id', as: 'appointments' });
 Appointment.belongsTo(DoctorProfile,         { foreignKey: 'doctor_id', as: 'doctor' });
 
@@ -186,13 +180,9 @@ DoctorDelayEvent.belongsTo(DoctorProfile,    { foreignKey: 'doctor_id', as: 'doc
 DoctorProfile.hasMany(OpdSession,          { foreignKey: 'doctor_id', as: 'opdSessions' });
 OpdSession.belongsTo(DoctorProfile,          { foreignKey: 'doctor_id', as: 'doctor' });
 
-// ── Schedule → Slot ───────────────────────────────────────────────────────────
-Schedule.hasMany(GeneratedSlot, { foreignKey: 'schedule_id', as: 'slots' });
-GeneratedSlot.belongsTo(Schedule, { foreignKey: 'schedule_id', as: 'schedule' });
-
-// ── Slot → Appointment (one-to-one) ──────────────────────────────────────────
-GeneratedSlot.hasOne(Appointment,  { foreignKey: 'slot_id', as: 'appointment' });
-Appointment.belongsTo(GeneratedSlot, { foreignKey: 'slot_id', as: 'slot' });
+// ── OpdSlotSession → Appointment (one-to-one) ────────────────────────────────
+OpdSlotSession.hasOne(Appointment,   { foreignKey: 'slot_id', as: 'appointment' });
+Appointment.belongsTo(OpdSlotSession,  { foreignKey: 'slot_id', as: 'slot' });
 
 // ── Appointment associations ──────────────────────────────────────────────────
 Appointment.hasOne(Payment,        { foreignKey: 'appointment_id', as: 'payment' });
@@ -201,8 +191,18 @@ Payment.belongsTo(Appointment,       { foreignKey: 'appointment_id', as: 'appoin
 Appointment.hasOne(ConsultationQueue, { foreignKey: 'appointment_id', as: 'queueEntry' });
 ConsultationQueue.belongsTo(Appointment, { foreignKey: 'appointment_id', as: 'appointment' });
 
+// ── OpdSession → OpdSlotSession (unified session holds its slot list) ────────
+OpdSession.hasMany(OpdSlotSession,    { foreignKey: 'session_id', as: 'slots' });
+OpdSlotSession.belongsTo(OpdSession,    { foreignKey: 'session_id', as: 'session' });
+
+// ── Schedule → OpdSession ─────────────────────────────────────────────────────
+Schedule.hasMany(OpdSession,          { foreignKey: 'schedule_id', as: 'opdSessions' });
+OpdSession.belongsTo(Schedule,          { foreignKey: 'schedule_id', as: 'schedule' });
+
 // ── OPD Session → Token ───────────────────────────────────────────────────────
-OpdSession.hasMany(OpdToken,       { foreignKey: 'session_id', as: 'tokens' });
+OpdSession.hasMany(OpdToken,        { foreignKey: 'session_id', as: 'tokens' });
+OpdSession.hasMany(OpdSessionBreak, { foreignKey: 'session_id', as: 'breaks' });
+OpdSessionBreak.belongsTo(OpdSession, { foreignKey: 'session_id', as: 'session' });
 OpdToken.belongsTo(OpdSession,       { foreignKey: 'session_id', as: 'session' });
 
 User.hasMany(OpdToken,             { foreignKey: 'patient_id', as: 'opdTokens' });

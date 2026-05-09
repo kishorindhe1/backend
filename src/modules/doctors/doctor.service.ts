@@ -5,7 +5,7 @@ import { DoctorProfile, VerificationStatus } from '../../models';
 import { DoctorHospitalAffiliation }         from '../../models';
 import { Hospital }          from '../../models';
 import { Schedule }          from '../../models';
-import { GeneratedSlot, SlotStatus } from '../../models';
+import { OpdSlotSession, OpdSlotStatus } from '../../models';
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { logger }            from '../../utils/logger';
 
@@ -132,11 +132,12 @@ export async function getDoctorProfile(doctorProfileId: string): Promise<Service
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
   const endOfToday   = new Date(); endOfToday.setHours(23, 59, 59, 999);
 
-  const slotsToday = await GeneratedSlot.count({
+  const today = new Date().toISOString().split('T')[0];
+  const slotsToday = await OpdSlotSession.count({
     where: {
-      doctor_id:     doctorProfileId,
-      status:        { [Op.in]: [SlotStatus.AVAILABLE, SlotStatus.BOOKED] },
-      slot_datetime: { [Op.between]: [startOfToday, endOfToday] },
+      doctor_id: doctorProfileId,
+      status:    { [Op.in]: [OpdSlotStatus.PUBLISHED, OpdSlotStatus.BOOKED] },
+      date:      today,
     },
   });
 

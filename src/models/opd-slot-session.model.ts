@@ -54,6 +54,7 @@ export class OpdSlotSession extends Model<
   declare status:                   CreationOptional<OpdSlotStatus>;
   declare slot_type:                CreationOptional<SlotType>;
   declare video_link:               string | null;
+  declare session_id:               ForeignKey<string> | null;
   declare appointment_id:           string | null;
   declare walk_in_token_id:         string | null;
   declare procedure_type_id:        string | null;
@@ -97,6 +98,7 @@ OpdSlotSession.init(
     },
     video_link:        { type: DataTypes.STRING(500), allowNull: true },
 
+    session_id:        { type: DataTypes.UUID,        allowNull: true,  references: { model: 'opd_sessions', key: 'id' } },
     appointment_id:    { type: DataTypes.UUID,        allowNull: true },
     walk_in_token_id:  { type: DataTypes.UUID,        allowNull: true },
     procedure_type_id: { type: DataTypes.UUID,        allowNull: true },

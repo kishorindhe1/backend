@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /Users/kishorindhe/Desktop/production/healthcare-api diff --staged --stat)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/healthcare-api diff --stat)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify diff --stat)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/healthcare-api log --oneline -3)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify log --oneline -3)",
+      "Bash(xargs basename *)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add services/apiService.ts \"app/\\(screens\\)/walkin-join/[sessionId].tsx\")",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify commit -m ' *)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add \"app/\\(screens\\)/doctor/[id].tsx\")",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add \"app/\\(tabs\\)/scan.tsx\" \"app/\\(tabs\\)/_layout.tsx\")",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add services/apiService.ts \"app/\\(screens\\)/doctor/[id].tsx\" \"app/\\(screens\\)/queue-join/[doctorId].tsx\")"
+    ],
+    "additionalDirectories": [
+      "/Users/kishorindhe/Desktop/production"
+    ]
+  }
+}

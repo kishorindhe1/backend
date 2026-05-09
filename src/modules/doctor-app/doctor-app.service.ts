@@ -4,7 +4,6 @@ import {
   Appointment, AppointmentStatus,
   OpdSlotSession, OpdSlotStatus,
   DoctorDelayEvent, DelayStatus, DelayType,
-  GeneratedSlot, SlotStatus,
   DoctorHospitalAffiliation,
   Schedule, DayOfWeek,
 }                                          from '../../models';
