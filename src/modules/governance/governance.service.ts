@@ -198,8 +198,8 @@ export async function draftSlotsForDate(
             start_time:         windowStart,
             expected_end_time:  windowEnd,
             total_tokens:       slotsGenerated,
-            online_token_limit: slotsGenerated,
-            walkin_token_limit: schedule.emergency_reserve_slots,
+            online_token_limit: 0,
+            walkin_token_limit: 0,
             status:             OpdSessionStatus.SCHEDULED,
           },
         });

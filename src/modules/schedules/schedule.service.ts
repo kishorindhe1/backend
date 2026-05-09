@@ -111,9 +111,8 @@ export async function updateQueueConfig(
 
   if (opdBookingMode === OpdBookingModeConfig.TOKEN_BASED && sessionsConfig) {
     for (const s of sessionsConfig.sessions) {
-      if (s.online_limit + s.walkin_limit > s.max_patients) {
-        return fail('INVALID_SESSIONS_CONFIG',
-          `Session "${s.name}": online_limit + walkin_limit exceeds max_patients.`, 422);
+      if (s.max_patients < 1) {
+        return fail('INVALID_SESSIONS_CONFIG', `Session "${s.name}": max_patients must be at least 1.`, 422);
       }
     }
   }

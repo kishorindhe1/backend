@@ -10,17 +10,24 @@ import { z }                          from 'zod';
 const param = (req: Request, k: string) => String((req.params as Record<string,string>)[k] ?? '');
 const STAFF = [UserRole.RECEPTIONIST, UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN];
 
+const BreakSchema = z.object({
+  start_time: z.string().regex(/^\d{2}:\d{2}$/),
+  end_time:   z.string().regex(/^\d{2}:\d{2}$/),
+  reason:     z.string().max(100).optional(),
+});
+
 const CreateSessionSchema = z.object({
   body: z.object({
-    doctor_id:          z.string().uuid(),
-    hospital_id:        z.string().uuid(),
-    session_date:       z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    session_type:       z.enum(['morning','evening','full_day']),
-    start_time:         z.string().regex(/^\d{2}:\d{2}$/),
-    expected_end_time:  z.string().regex(/^\d{2}:\d{2}$/),
-    total_tokens:       z.number().int().min(1).max(500),
-    online_token_limit: z.number().int().min(0),
-    walkin_token_limit: z.number().int().min(0),
+    doctor_id:            z.string().uuid(),
+    hospital_id:          z.string().uuid(),
+    session_date:         z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    session_type:         z.string().min(1).max(50),
+    start_time:           z.string().regex(/^\d{2}:\d{2}$/),
+    expected_end_time:    z.string().regex(/^\d{2}:\d{2}$/),
+    total_tokens:         z.number().int().min(1).max(500),
+    booking_mode:         z.enum(['slot_based','token_based']).optional(),
+    avg_time_per_patient: z.number().int().min(1).max(120).optional(),
+    breaks:               z.array(BreakSchema).max(10).optional(),
   }),
 });
 

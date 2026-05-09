@@ -121,6 +121,7 @@ import { ConsultationQueue }          from './consultation-queue.model';
 import { DoctorDelayEvent }           from './doctor-delay-event.model';
 import { NotificationLog }            from './notification-log.model';
 import { UserNotificationPreference } from './notification-preference.model';
+import { OpdSlotSession }             from './opd-slot-session.model';
 import { OpdSession }                 from './opd-session.model';
 import { OpdSessionBreak }            from './opd-session-break.model';
 import { OpdToken }                   from './opd-token.model';
@@ -255,7 +256,6 @@ HospitalCollection.belongsTo(User,       { foreignKey: 'collected_by', as: 'coll
 // PHASE 1 — Slot Governance associations
 // ═════════════════════════════════════════════════════════════════════════════
 
-import { OpdSlotSession }              from './opd-slot-session.model';
 import { ProcedureType }               from './procedure-type.model';
 import { DoctorAvailabilityWindow }    from './doctor-availability-window.model';
 import { DoctorAvailabilityOverride }  from './doctor-availability-override.model';

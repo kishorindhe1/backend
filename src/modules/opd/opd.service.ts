@@ -18,16 +18,23 @@ import { logger }                   from '../../utils/logger';
 import { getEffectiveDuration }     from '../duration/duration.service';
 
 // ── Create OPD session ────────────────────────────────────────────────────────
+export interface BreakInput {
+  start_time: string;  // HH:MM
+  end_time:   string;
+  reason?:    string;
+}
+
 export interface CreateSessionInput {
-  doctor_id:          string;
-  hospital_id:        string;
-  session_date:       string;
-  session_type:       string;
-  start_time:         string;
-  expected_end_time:  string;
-  total_tokens:       number;
-  online_token_limit: number;
-  walkin_token_limit: number;
+  doctor_id:            string;
+  hospital_id:          string;
+  session_date:         string;
+  session_type:         string;
+  start_time:           string;
+  expected_end_time:    string;
+  total_tokens:         number;
+  booking_mode?:        OpdBookingMode;
+  avg_time_per_patient?: number;
+  breaks?:              BreakInput[];   // pre-planned breaks for the session
 }
 
 export async function createSession(input: CreateSessionInput): Promise<ServiceResponse<object>> {
@@ -36,19 +43,53 @@ export async function createSession(input: CreateSessionInput): Promise<ServiceR
   });
   if (existing) throw ErrorFactory.conflict('SESSION_EXISTS', 'A session for this doctor on this date already exists.');
 
+  // Validate break windows before creating anything
+  const breaks = input.breaks ?? [];
+  for (const b of breaks) {
+    if (b.start_time >= b.end_time) {
+      throw ErrorFactory.unprocessable('INVALID_BREAK', `Break ${b.start_time}–${b.end_time}: start must be before end.`);
+    }
+    if (b.start_time < input.start_time || b.end_time > input.expected_end_time) {
+      throw ErrorFactory.unprocessable('BREAK_OUTSIDE_SESSION', `Break ${b.start_time}–${b.end_time} falls outside session window.`);
+    }
+  }
+  for (let i = 0; i < breaks.length; i++) {
+    for (let j = i + 1; j < breaks.length; j++) {
+      if (breaks[i].start_time < breaks[j].end_time && breaks[i].end_time > breaks[j].start_time) {
+        throw ErrorFactory.unprocessable('BREAK_OVERLAP', `Breaks at ${breaks[i].start_time} and ${breaks[j].start_time} overlap.`);
+      }
+    }
+  }
+
   const session = await OpdSession.create({
-    ...input,
-    booking_mode:        OpdBookingMode.TOKEN_BASED,
-    actual_start_time:   null,
-    actual_end_time:     null,
-    tokens_issued:       0,
-    current_token:       0,
-    avg_time_per_patient:5,
-    status:              OpdSessionStatus.SCHEDULED,
+    doctor_id:            input.doctor_id,
+    hospital_id:          input.hospital_id,
+    session_date:         input.session_date,
+    session_type:         input.session_type,
+    start_time:           input.start_time,
+    expected_end_time:    input.expected_end_time,
+    total_tokens:         input.total_tokens,
+    online_token_limit:   0,
+    walkin_token_limit:   0,
+    booking_mode:         input.booking_mode ?? OpdBookingMode.TOKEN_BASED,
+    actual_start_time:    null,
+    actual_end_time:      null,
+    tokens_issued:        0,
+    current_token:        0,
+    avg_time_per_patient: input.avg_time_per_patient ?? 10,
+    status:               OpdSessionStatus.SCHEDULED,
   });
 
-  logger.info('OPD session created', { sessionId: session.id });
-  return ok(session);
+  let createdBreaks: object[] = [];
+  if (breaks.length > 0) {
+    const records = await OpdSessionBreak.bulkCreate(
+      breaks.map((b) => ({ session_id: session.id, start_time: b.start_time, end_time: b.end_time, reason: b.reason ?? null })),
+    );
+    createdBreaks = records.map((r) => r.toJSON());
+  }
+
+  logger.info('OPD session created', { sessionId: session.id, breaks: breaks.length });
+  return ok({ ...session.toJSON(), breaks: createdBreaks });
 }
 
 // ── Issue token (online booking) ──────────────────────────────────────────────
@@ -66,7 +107,7 @@ export async function issueOnlineToken(
     const session = await OpdSession.findByPk(sessionId);
     if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'OPD session not found.');
     if (session.status === OpdSessionStatus.CANCELLED) throw ErrorFactory.unprocessable('SESSION_CANCELLED', 'This session has been cancelled.');
-    if (session.tokens_issued >= session.online_token_limit) throw ErrorFactory.conflict('TOKENS_FULL', 'Online tokens for this session are fully booked.');
+    if (session.tokens_issued >= session.total_tokens) throw ErrorFactory.conflict('TOKENS_FULL', 'This session is fully booked.');
 
     const tokenNumber = session.tokens_issued + 1;
 
@@ -75,7 +116,7 @@ export async function issueOnlineToken(
     // Snapshot effective duration at queue-join time for accurate live ETA
     const durationSnapshot = await getEffectiveDuration(patientId, session.doctor_id);
 
-    const token = await OpdToken.create({
+    await OpdToken.create({
       session_id:                   sessionId,
       token_number:                 tokenNumber,
       patient_id:                   patientId,
@@ -273,7 +314,7 @@ export async function getSessionPublicInfo(
 }
 
 // ── Activate session ──────────────────────────────────────────────────────────
-export async function activateSession(sessionId: string, receptionistId: string): Promise<ServiceResponse<object>> {
+export async function activateSession(sessionId: string, _receptionistId: string): Promise<ServiceResponse<object>> {
   const session = await OpdSession.findByPk(sessionId);
   if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
   if (session.status !== OpdSessionStatus.SCHEDULED) throw ErrorFactory.unprocessable('INVALID_STATUS', `Cannot activate a ${session.status} session.`);
@@ -564,14 +605,10 @@ export async function generateSessionsFromSchedule(
     sessions = config.sessions;
   } else {
     // Fall back to single session covering the full schedule window
-    const onlineLimit = Math.floor(schedule.max_patients * 0.7);
     sessions = [{
-      name:         dateToDayOfWeek(date) === 'sunday' ? 'morning' :
-                    parseInt(schedule.start_time, 10) < 12 ? 'morning' : 'evening',
+      name:         'Session 1',
       start_time:   schedule.start_time,
       max_patients: schedule.max_patients,
-      online_limit: onlineLimit,
-      walkin_limit: schedule.max_patients - onlineLimit,
     }];
   }
 
@@ -592,8 +629,8 @@ export async function generateSessionsFromSchedule(
       start_time:          sess.start_time,
       expected_end_time:   addMinutesToTime(sess.start_time, sess.max_patients * avgMins),
       total_tokens:        sess.max_patients,
-      online_token_limit:  sess.online_limit,
-      walkin_token_limit:  sess.walkin_limit,
+      online_token_limit:  0,
+      walkin_token_limit:  0,
       tokens_issued:       0,
       current_token:       0,
       avg_time_per_patient: avgMins,
@@ -630,21 +667,21 @@ export async function listAvailableSessions(
     const avgMins           = Number(s.avg_time_per_patient);
     const pendingAhead      = Math.max(0, issued - current);
     const estimatedWait     = pendingAhead * avgMins;
-    const onlineRemaining   = Math.max(0, s.online_token_limit - issued);
+    const tokensRemaining = Math.max(0, s.total_tokens - issued);
 
     return {
-      session_id:              s.id,
-      session_type:            s.session_type,
-      start_time:              s.start_time,
-      expected_end_time:       s.expected_end_time,
-      total_tokens:            s.total_tokens,
-      tokens_issued:           issued,
-      online_tokens_remaining: onlineRemaining,
-      current_token:           current,
-      avg_time_per_patient:    avgMins,
-      estimated_wait_minutes:  estimatedWait,
-      status:                  s.status,
-      is_available:            onlineRemaining > 0 && s.status !== OpdSessionStatus.PAUSED,
+      session_id:             s.id,
+      session_type:           s.session_type,
+      start_time:             s.start_time,
+      expected_end_time:      s.expected_end_time,
+      total_tokens:           s.total_tokens,
+      tokens_issued:          issued,
+      tokens_remaining:       tokensRemaining,
+      current_token:          current,
+      avg_time_per_patient:   avgMins,
+      estimated_wait_minutes: estimatedWait,
+      status:                 s.status,
+      is_available:           tokensRemaining > 0 && s.status !== OpdSessionStatus.PAUSED,
     };
   });
 

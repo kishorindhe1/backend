@@ -27,15 +27,15 @@ export class OpdSession extends Model<
   declare hospital_id:          ForeignKey<string>;
   declare schedule_id:          ForeignKey<string> | null;
   declare session_date:         string;             // YYYY-MM-DD
-  declare session_type:         string;             // 'morning' | 'evening' | 'full_day'
+  declare session_type:         string;             // free label set by staff e.g. 'OPD-A', 'Slot 1'
   declare booking_mode:         CreationOptional<OpdBookingMode>;
   declare start_time:           string;             // 'HH:MM'
   declare expected_end_time:    string;
   declare actual_start_time:    string | null;
   declare actual_end_time:      string | null;
   declare total_tokens:         number;
-  declare online_token_limit:   number;
-  declare walkin_token_limit:   number;
+  declare online_token_limit:   number;  // deprecated — always 0, use total_tokens
+  declare walkin_token_limit:   number;  // deprecated — always 0, use total_tokens
   declare tokens_issued:        CreationOptional<number>;
   declare current_token:        CreationOptional<number>;
   declare avg_time_per_patient: CreationOptional<number>;
@@ -51,7 +51,7 @@ OpdSession.init(
     hospital_id: { type: DataTypes.UUID, allowNull: false, references: { model: 'hospitals',       key: 'id' } },
     schedule_id: { type: DataTypes.UUID, allowNull: true,  references: { model: 'schedules',       key: 'id' } },
     session_date:      { type: DataTypes.DATEONLY,   allowNull: false },
-    session_type:      { type: DataTypes.STRING(20), allowNull: false, defaultValue: 'morning' },
+    session_type:      { type: DataTypes.STRING(50), allowNull: false },
     booking_mode: {
       type: DataTypes.ENUM(...Object.values(OpdBookingMode)),
       allowNull: false, defaultValue: OpdBookingMode.TOKEN_BASED,

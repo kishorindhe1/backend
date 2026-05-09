@@ -88,8 +88,6 @@ const SessionDefSchema = z.object({
   name:         z.string().min(1).max(30),
   start_time:   z.string().regex(/^\d{2}:\d{2}$/),
   max_patients: z.number().int().min(1).max(500),
-  online_limit: z.number().int().min(0),
-  walkin_limit: z.number().int().min(0),
 });
 
 const QueueConfigSchema = z.object({

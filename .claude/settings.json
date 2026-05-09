@@ -11,10 +11,13 @@
       "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify commit -m ' *)",
       "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add \"app/\\(screens\\)/doctor/[id].tsx\")",
       "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add \"app/\\(tabs\\)/scan.tsx\" \"app/\\(tabs\\)/_layout.tsx\")",
-      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add services/apiService.ts \"app/\\(screens\\)/doctor/[id].tsx\" \"app/\\(screens\\)/queue-join/[doctorId].tsx\")"
+      "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add services/apiService.ts \"app/\\(screens\\)/doctor/[id].tsx\" \"app/\\(screens\\)/queue-join/[doctorId].tsx\")",
+      "Bash(kill 12002)",
+      "Bash(ts-node src/server.ts)"
     ],
     "additionalDirectories": [
-      "/Users/kishorindhe/Desktop/production"
+      "/Users/kishorindhe/Desktop/production",
+      "/tmp"
     ]
   }
 }

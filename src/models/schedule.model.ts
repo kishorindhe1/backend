@@ -33,11 +33,9 @@ export enum OpdBookingModeConfig {
 
 // Shape of sessions_config JSONB for token_based schedules
 export interface SessionDef {
-  name:         string;   // 'morning' | 'evening' | 'afternoon'
+  name:         string;   // free label, e.g. 'OPD-A', 'Session 1'
   start_time:   string;   // 'HH:MM'
   max_patients: number;
-  online_limit: number;
-  walkin_limit: number;
 }
 
 export interface SessionsConfig {

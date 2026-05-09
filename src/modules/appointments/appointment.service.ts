@@ -60,8 +60,8 @@ async function bookQueueAppointment(input: BookAppointmentInput): Promise<Servic
     if (![OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE].includes(session.status as OpdSessionStatus)) {
       throw ErrorFactory.unprocessable('SESSION_UNAVAILABLE', `Session is ${session.status} and not accepting bookings.`);
     }
-    if (session.tokens_issued >= session.online_token_limit) {
-      throw ErrorFactory.conflict('SESSION_FULL', 'Online tokens for this session are fully booked.');
+    if (session.tokens_issued >= session.total_tokens) {
+      throw ErrorFactory.conflict('SESSION_FULL', 'This session is fully booked.');
     }
 
     // One active token per patient per session
@@ -110,7 +110,7 @@ async function bookQueueAppointment(input: BookAppointmentInput): Promise<Servic
         where: { id: session_id! },
         lock: t.LOCK.UPDATE, transaction: t,
       });
-      if (!locked || locked.tokens_issued >= locked.online_token_limit) {
+      if (!locked || locked.tokens_issued >= locked.total_tokens) {
         throw ErrorFactory.conflict('SESSION_FULL', 'Session just filled up. Please try another session.');
       }
 
