@@ -178,6 +178,13 @@ async function publishSlots(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function draftRange(req: Request, res: Response): Promise<void> {
+  const { hospital_id, from_date, to_date } = req.body as { hospital_id: string; from_date: string; to_date: string };
+  const result = await GovernanceService.draftRangeAndPublish(hospital_id, from_date, to_date);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function getDraftSlots(req: Request, res: Response): Promise<void> {
   const { hospitalId, date } = req.params as { hospitalId: string; date: string };
   const result = await GovernanceService.getDraftSlots(hospitalId, date);
@@ -331,6 +338,15 @@ router.post(
   requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN, UserRole.RECEPTIONIST),
   validate(PublishSchema),
   asyncHandler(publishSlots),
+);
+
+// Bulk draft + publish for a date range
+router.post(
+  '/draft-range',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(z.object({ body: z.object({ hospital_id: z.string().uuid(), from_date: z.string().regex(dateRegex), to_date: z.string().regex(dateRegex) }) })),
+  asyncHandler(draftRange),
 );
 
 // Apply a doctor availability override — receptionist + hospital_admin

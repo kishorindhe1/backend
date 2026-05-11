@@ -13,7 +13,15 @@
       "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add \"app/\\(tabs\\)/scan.tsx\" \"app/\\(tabs\\)/_layout.tsx\")",
       "Bash(git -C /Users/kishorindhe/Desktop/production/upcharify add services/apiService.ts \"app/\\(screens\\)/doctor/[id].tsx\" \"app/\\(screens\\)/queue-join/[doctorId].tsx\")",
       "Bash(kill 12002)",
-      "Bash(ts-node src/server.ts)"
+      "Bash(ts-node src/server.ts)",
+      "Bash(tee /tmp/api-live.log)",
+      "Bash(npx sequelize-cli *)",
+      "Bash(psql -U kishorindhe -d healthcare_dev -c \"\\\\d opd_sessions\")",
+      "Bash(psql -d healthcare_dev -c \"\\\\d opd_sessions\")",
+      "Bash(node -e ' *)",
+      "Bash(node dist/server.js)",
+      "Bash(git push *)",
+      "Bash(npx vite *)"
     ],
     "additionalDirectories": [
       "/Users/kishorindhe/Desktop/production",

@@ -529,7 +529,8 @@ export interface TodayDoctorSummary {
 export async function getTodayOPD(
   hospitalId: string,
 ): Promise<ServiceResponse<{ date: string; doctors: TodayDoctorSummary[] }>> {
-  const date = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
   // All published/booked/completed slots for this hospital today
   const allSlots = await OpdSlotSession.findAll({
@@ -629,4 +630,75 @@ export async function getTodayOPD(
   summaries.sort((a, b) => (ORDER[a.doctor_status] ?? 2) - (ORDER[b.doctor_status] ?? 2));
 
   return ok({ date, doctors: summaries });
+}
+
+// ── Draft + publish slots for a date range ────────────────────────────────────
+function eachDayInRange(fromDate: string, toDate: string): string[] {
+  const dates: string[] = [];
+  const cur = new Date(`${fromDate}T12:00:00`);
+  const end = new Date(`${toDate}T12:00:00`);
+  while (cur <= end) {
+    const y = cur.getFullYear();
+    const m = String(cur.getMonth() + 1).padStart(2, '0');
+    const d = String(cur.getDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${d}`);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return dates;
+}
+
+export interface DraftRangeResult {
+  date:             string;
+  doctors_drafted:  number;
+  total_slots:      number;
+  published:        number;
+  errors:           string[];
+}
+
+export async function draftRangeAndPublish(
+  hospitalId: string,
+  fromDate:   string,
+  toDate:     string,
+  reviewedBy  = 'auto_bulk',
+): Promise<ServiceResponse<{ results: DraftRangeResult[]; total_sessions: number; total_slots: number }>> {
+  const dates = eachDayInRange(fromDate, toDate);
+  if (!dates.length) return fail('INVALID_RANGE', 'from_date must be on or before to_date.', 400);
+  if (dates.length > 30) return fail('RANGE_TOO_LARGE', 'Maximum 30 days per bulk schedule.', 400);
+
+  const results: DraftRangeResult[] = [];
+  let totalSessions = 0;
+  let totalSlots    = 0;
+
+  for (const date of dates) {
+    const errors: string[] = [];
+    let drafted = 0;
+    let slots   = 0;
+    let published = 0;
+
+    try {
+      const draftRes = await draftSlotsForDate(hospitalId, date);
+      if (draftRes.success) {
+        drafted = draftRes.data.doctors_drafted;
+        slots   = draftRes.data.total_slots;
+      } else {
+        errors.push(`Draft failed: ${draftRes.message}`);
+      }
+    } catch (err) {
+      errors.push(`Draft error: ${String(err)}`);
+    }
+
+    try {
+      const pubRes = await publishSlots(hospitalId, date, reviewedBy);
+      if (pubRes.success) published = pubRes.data.published;
+    } catch {
+      // No drafts to publish for this date is acceptable
+    }
+
+    results.push({ date, doctors_drafted: drafted, total_slots: slots, published, errors });
+    totalSessions += drafted;
+    totalSlots    += slots;
+  }
+
+  logger.info('Bulk schedule completed', { hospitalId, fromDate, toDate, totalSessions, totalSlots });
+  return ok({ results, total_sessions: totalSessions, total_slots: totalSlots });
 }

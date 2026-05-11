@@ -200,7 +200,25 @@ export async function joinAsWalkin(
         status: { [Op.notIn]: [OpdTokenStatus.CANCELLED, OpdTokenStatus.NO_SHOW] },
       },
     });
-    if (existing) throw ErrorFactory.conflict('ALREADY_IN_QUEUE', `You already have token #${existing.token_number} in this session.`);
+    if (existing) {
+      // Late check-in: patient had a pre-booked slot (ISSUED) but arrived after their slot time.
+      // Mark them ARRIVED so they re-enter the call queue, rather than leaving them in limbo.
+      if (existing.status === OpdTokenStatus.ISSUED) {
+        await existing.update({ status: OpdTokenStatus.ARRIVED, arrived_at: new Date() });
+        const estimatedWait = await calculateEstimatedWait(session, existing.token_number);
+        const doctor = session.get('doctor') as DoctorProfile | undefined;
+        logger.info('Late check-in: ISSUED token re-activated', { sessionId, patientId, tokenNumber: existing.token_number });
+        return ok({
+          token_number:           existing.token_number,
+          estimated_wait_minutes: estimatedWait,
+          session_id:             sessionId,
+          doctor_name:            doctor?.full_name ?? 'Doctor',
+          appointment_id:         existing.appointment_id ?? '',
+          late_arrival:           true,
+        });
+      }
+      throw ErrorFactory.conflict('ALREADY_IN_QUEUE', `You already have token #${existing.token_number} in this session.`);
+    }
 
     const totalIssued = session.tokens_issued + 1;
     await session.update({ tokens_issued: totalIssued });
@@ -464,10 +482,62 @@ export async function listSessions(
 
   const sessions = await OpdSession.findAll({
     where,
+    include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] }],
     order: [['session_date', 'DESC'], ['start_time', 'ASC']],
   });
 
   return ok(sessions.map((s) => s.toJSON()));
+}
+
+// ── OPD History — past sessions with summary stats ────────────────────────────
+export async function getSessionHistory(
+  hospitalId: string,
+  doctorId?:  string,
+  dateFrom?:  string,
+  dateTo?:    string,
+  status?:    OpdSessionStatus,
+  page    = 1,
+  perPage = 20,
+): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  const where: Record<string, unknown> = { hospital_id: hospitalId };
+  if (doctorId) where.doctor_id = doctorId;
+  if (status)   where.status    = status;
+  if (dateFrom && dateTo) {
+    where.session_date = { [Op.between]: [dateFrom, dateTo] };
+  } else if (dateFrom) {
+    where.session_date = { [Op.gte]: dateFrom };
+  } else if (dateTo) {
+    where.session_date = { [Op.lte]: dateTo };
+  }
+
+  const { rows, count } = await OpdSession.findAndCountAll({
+    where,
+    include: [{ model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] }],
+    order:  [['session_date', 'DESC'], ['start_time', 'ASC']],
+    limit:  perPage,
+    offset: (page - 1) * perPage,
+  });
+
+  // Enrich each session with token counts
+  const enriched = await Promise.all(rows.map(async (s) => {
+    const [completed, skipped, no_show] = await Promise.all([
+      OpdToken.count({ where: { session_id: s.id, status: OpdTokenStatus.COMPLETED } }),
+      OpdToken.count({ where: { session_id: s.id, status: OpdTokenStatus.SKIPPED   } }),
+      OpdToken.count({ where: { session_id: s.id, status: OpdTokenStatus.NO_SHOW   } }),
+    ]);
+    const doc = s.get('doctor') as DoctorProfile | undefined;
+    return {
+      ...s.toJSON(),
+      doctor_name:            doc?.full_name    ?? null,
+      specialization:         doc?.specialization ?? null,
+      completed_count:        completed,
+      skipped_count:          skipped,
+      no_show_count:          no_show,
+      avg_consultation_minutes: Number(s.avg_time_per_patient),
+    };
+  }));
+
+  return ok({ rows: enriched, count });
 }
 
 // ── List tokens for a session ─────────────────────────────────────────────────

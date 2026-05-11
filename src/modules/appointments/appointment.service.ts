@@ -23,6 +23,15 @@ import { addToQueue, invalidateQueueCache } from '../queue/queue.service';
 import { enqueueNotification }           from '../notifications/notification.service';
 import { NotificationChannel }           from '../../models';
 
+// ── Local datetime string — avoids UTC parsing bugs in past-slot checks ───────
+// Returns YYYY-MM-DDTHH:MM:SS using the server's LOCAL clock.
+// Slot times are stored as local strings (HH:MM), so we must compare in local time.
+function localNowDateTime(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+}
+
 // ── Fee split ─────────────────────────────────────────────────────────────────
 function calcFee(amount: number) {
   const platform_fee  = Math.round(amount * (env.PLATFORM_FEE_PERCENTAGE / 100) * 100) / 100;
@@ -82,9 +91,13 @@ async function bookQueueAppointment(input: BookAppointmentInput): Promise<Servic
 
     // Booking preference checks — treat session start as the appointment time
     const pref = await DoctorBookingPreference.findOne({ where: { doctor_id, hospital_id } });
-    if (pref) {
-      const slotTime = new Date(`${session.session_date}T${session.start_time}:00`).getTime();
-      const now      = Date.now();
+    // Lead-time / cutoff checks only apply before the session starts.
+    // Once ACTIVE, the doctor is already seeing patients — no point enforcing advance booking rules.
+    if (pref && session.status === OpdSessionStatus.SCHEDULED) {
+      const [sy, sm, sd] = session.session_date.split('-').map(Number);
+      const [sh, smin]   = session.start_time.split(':').map(Number);
+      const slotTime     = new Date(sy, sm - 1, sd, sh, smin, 0, 0).getTime(); // local time, avoids UTC parse bug
+      const now          = Date.now();
       if (pref.min_booking_lead_hours > 0 && slotTime - now < pref.min_booking_lead_hours * 3_600_000) {
         throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
       }
@@ -102,7 +115,9 @@ async function bookQueueAppointment(input: BookAppointmentInput): Promise<Servic
       resolvedPaymentMode = PaymentMode.ONLINE_PREPAID;
     }
 
-    const scheduledAt = new Date(`${session.session_date}T${session.start_time}:00`);
+    // Record the actual time the patient joined, not the session start time.
+    // Booking at 4 PM into a 2:30 PM session should show 4 PM on the appointment.
+    const scheduledAt = new Date();
 
     const { appointment, tokenNumber } = await sequelize.transaction(async (t) => {
       // Re-check capacity inside transaction
@@ -286,8 +301,9 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       });
       if (!slot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'Slot not found.');
       if (slot.status !== OpdSlotStatus.PUBLISHED) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot has already been booked.');
-      const slotDateTime = new Date(`${slot.date}T${slot.slot_start_time}:00`);
-      if (slotDateTime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot book a past slot.');
+      const slotDateTimeStr = `${slot.date}T${slot.slot_start_time}:00`;
+      if (slotDateTimeStr < localNowDateTime()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot book a past slot.');
+      const slotDateTime = new Date(slotDateTimeStr);
 
       const affiliation = await DoctorHospitalAffiliation.findOne({ where: { doctor_id, hospital_id, is_active: true }, transaction: t });
       if (!affiliation) throw ErrorFactory.unprocessable('DOCTOR_NOT_AFFILIATED', 'Doctor is not affiliated with this hospital.');
@@ -555,7 +571,7 @@ export async function rescheduleAppointment(
       if (!newSlot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'New slot not found.');
       if (newSlot.status !== OpdSlotStatus.PUBLISHED) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot has already been booked.');
       const newSlotDateTime = new Date(`${newSlot.date}T${newSlot.slot_start_time}:00`);
-      if (newSlotDateTime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
+      if (`${newSlot.date}T${newSlot.slot_start_time}:00` < localNowDateTime()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
 
       // Free the old slot
       if (appointment.slot_id) {

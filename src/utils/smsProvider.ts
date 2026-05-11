@@ -171,13 +171,24 @@ export async function sendPush(
     return { msgId: `push_dev_${Date.now()}` };
   }
 
-  const app = getFirebaseApp();
-  const msgId = await app.messaging().send({
+  const imageUrl = data?.image_url;
+  const app      = getFirebaseApp();
+  const msgId    = await app.messaging().send({
     token:        deviceToken,
-    notification: { title, body },
+    notification: { title, body, ...(imageUrl ? { imageUrl } : {}) },
     data:         data ?? {},
-    android: { priority: 'high', notification: { sound: 'default', channelId: 'upcharify_alerts' } },
-    apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
+    android: {
+      priority: 'high',
+      notification: {
+        sound:     'default',
+        channelId: 'upcharify_alerts',
+        ...(imageUrl ? { imageUrl } : {}),
+      },
+    },
+    apns: {
+      payload:    { aps: { sound: 'default', badge: 1 } },
+      ...(imageUrl ? { fcmOptions: { imageUrl } } : {}),
+    },
   });
   logger.info('FCM push sent', { msgId, token: deviceToken.slice(0, 20) });
   return { msgId };

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import * as OpdService                from './opd.service';
+import { OpdSessionStatus }          from '../../models';
 import { authenticate, requireRole }  from '../../middlewares/auth.middleware';
 import { validate }                   from '../../middlewares/validate.middleware';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
@@ -142,6 +143,20 @@ router.post('/generate', authenticate, requireRole(...STAFF), validate(GenerateS
   const result = await OpdService.generateSessionsFromSchedule(doctor_id, hospital_id, date);
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   sendCreated(res, result.data);
+}));
+
+// History — past sessions with stats
+router.get('/history', authenticate, requireRole(...STAFF), asyncHandler(async (req: Request, res: Response) => {
+  const { hospital_id, doctor_id, date_from, date_to, status, page, per_page } = req.query as Record<string, string>;
+  if (!hospital_id) { sendError(res, 400, { code: 'MISSING_HOSPITAL', message: 'hospital_id is required.' }); return; }
+  const result = await OpdService.getSessionHistory(
+    hospital_id, doctor_id, date_from, date_to,
+    status as OpdSessionStatus | undefined,
+    page ? Number(page) : 1,
+    per_page ? Number(per_page) : 20,
+  );
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
 }));
 
 // List sessions
