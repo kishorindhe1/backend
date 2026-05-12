@@ -59,6 +59,7 @@ export async function getAllSlotsForAdmin(
 
   return ok(slots.map((s) => ({
     slot_id:          s.id,
+    slot_datetime:    `${s.date}T${s.slot_start_time}:00`,
     slot_start_time:  s.slot_start_time,
     slot_end_time:    s.slot_end_time,
     duration_minutes: s.duration_minutes,
@@ -125,6 +126,81 @@ export async function updateQueueConfig(
   await redis.del(RedisKeys.doctorSchedule(schedule.doctor_id));
   logger.info('Schedule queue config updated', { scheduleId, opdBookingMode });
   return ok(schedule.toJSON());
+}
+
+// ── Generate slots from schedule config for a date range ─────────────────────
+export async function generateSlots(
+  doctorId:   string,
+  hospitalId: string,
+  fromDate:   string,  // YYYY-MM-DD
+  toDate:     string,  // YYYY-MM-DD
+): Promise<ServiceResponse<{ generated: number }>> {
+  const schedules = await Schedule.findAll({
+    where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true },
+  });
+
+  if (!schedules.length) {
+    return fail('NO_SCHEDULES', 'No active schedules found for this doctor at this hospital.', 404);
+  }
+
+  const DAY_MAP: Record<number, string> = {
+    0: 'sunday', 1: 'monday', 2: 'tuesday', 3: 'wednesday',
+    4: 'thursday', 5: 'friday', 6: 'saturday',
+  };
+
+  const scheduleByDay = new Map<string, typeof schedules>();
+  for (const s of schedules) {
+    const arr = scheduleByDay.get(s.day_of_week) ?? [];
+    arr.push(s);
+    scheduleByDay.set(s.day_of_week, arr);
+  }
+
+  function pad2(n: number) { return String(n).padStart(2, '0'); }
+  function toHHMM(totalMins: number) { return `${pad2(Math.floor(totalMins / 60))}:${pad2(totalMins % 60)}`; }
+
+  const rows: Array<{
+    doctor_id: string; hospital_id: string; schedule_id: string; date: string;
+    slot_start_time: string; slot_end_time: string; duration_minutes: number;
+    status: OpdSlotStatus; published_at: Date;
+  }> = [];
+
+  const from = new Date(fromDate + 'T00:00:00');
+  const to   = new Date(toDate   + 'T00:00:00');
+
+  for (let d = new Date(from); d <= to; d.setDate(d.getDate() + 1)) {
+    const dayName   = DAY_MAP[d.getDay()];
+    const dateStr   = `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const dayScheds = scheduleByDay.get(dayName) ?? [];
+
+    for (const sch of dayScheds) {
+      const [endH, endM] = sch.end_time.split(':').map(Number);
+      const endMins      = endH * 60 + endM;
+      const dur          = sch.slot_duration_minutes;
+      const [stH, stM]   = sch.start_time.split(':').map(Number);
+      let   cursor       = stH * 60 + stM;
+
+      while (cursor + dur <= endMins) {
+        rows.push({
+          doctor_id:        doctorId,
+          hospital_id:      hospitalId,
+          schedule_id:      sch.id,
+          date:             dateStr,
+          slot_start_time:  toHHMM(cursor),
+          slot_end_time:    toHHMM(cursor + dur),
+          duration_minutes: dur,
+          status:           OpdSlotStatus.PUBLISHED,
+          published_at:     new Date(),
+        });
+        cursor += dur;
+      }
+    }
+  }
+
+  if (!rows.length) return ok({ generated: 0 });
+
+  const created = await OpdSlotSession.bulkCreate(rows as any, { ignoreDuplicates: true });
+  logger.info('Slots generated', { doctorId, hospitalId, fromDate, toDate, generated: created.length });
+  return ok({ generated: created.length });
 }
 
 // ── Block a slot (doctor leave, holiday) ─────────────────────────────────────

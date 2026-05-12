@@ -348,28 +348,74 @@ export async function activateSession(sessionId: string, _receptionistId: string
   return ok({ session_id: sessionId, status: OpdSessionStatus.ACTIVE, actual_start_time: timeStr });
 }
 
+// ── Mark a specific token as complete (receptionist override) ─────────────────
+export async function markTokenComplete(
+  sessionId: string,
+  tokenId:   string,
+): Promise<ServiceResponse<object>> {
+  const session = await OpdSession.findByPk(sessionId);
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+
+  const token = await OpdToken.findOne({ where: { id: tokenId, session_id: sessionId } });
+  if (!token) throw ErrorFactory.notFound('TOKEN_NOT_FOUND', 'Token not found in this session.');
+
+  const MARKABLE = [
+    OpdTokenStatus.CALLED, OpdTokenStatus.IN_PROGRESS,
+    OpdTokenStatus.ARRIVED, OpdTokenStatus.WAITING, OpdTokenStatus.ISSUED,
+  ];
+  if (!MARKABLE.includes(token.status)) {
+    throw ErrorFactory.unprocessable('INVALID_STATUS', `Token is already ${token.status}.`);
+  }
+
+  const now = new Date();
+  // Use called_at as consultation_start if not set — gives meaningful avg time
+  const consultStart = token.consultation_start ?? token.called_at ?? now;
+  await token.update({
+    status:             OpdTokenStatus.COMPLETED,
+    consultation_start: token.consultation_start ?? consultStart,
+    consultation_end:   now,
+  });
+  await updateSessionAvg(session, { ...token.toJSON(), consultation_start: consultStart, consultation_end: now } as any);
+
+  logger.info('Token manually marked complete', { sessionId, tokenId });
+  return ok({ token_id: tokenId, status: OpdTokenStatus.COMPLETED });
+}
+
 // ── Call next token ───────────────────────────────────────────────────────────
 export async function callNextToken(sessionId: string): Promise<ServiceResponse<object>> {
   const session = await OpdSession.findByPk(sessionId);
   if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
   if (session.status !== OpdSessionStatus.ACTIVE) throw ErrorFactory.unprocessable('SESSION_NOT_ACTIVE', 'Session is not active.');
 
-  // Complete current in-progress token and capture it for avg calculation
+  // Complete the token currently being seen (CALLED or IN_PROGRESS)
   const completing = await OpdToken.findOne({
-    where: { session_id: sessionId, status: OpdTokenStatus.IN_PROGRESS },
+    where: { session_id: sessionId, status: { [Op.in]: [OpdTokenStatus.CALLED, OpdTokenStatus.IN_PROGRESS] } },
   });
   if (completing) {
-    await completing.update({ status: OpdTokenStatus.COMPLETED, consultation_end: new Date() });
-    await updateSessionAvg(session, completing);
+    const now = new Date();
+    const consultStart = completing.consultation_start ?? completing.called_at ?? now;
+    await completing.update({ status: OpdTokenStatus.COMPLETED, consultation_end: now });
+    await updateSessionAvg(session, { ...completing.toJSON(), consultation_start: consultStart, consultation_end: now } as any);
   }
 
-  // Find next
+  // Find next patient who is physically present and waiting
   const next = await OpdToken.findOne({
     where: { session_id: sessionId, status: { [Op.in]: [OpdTokenStatus.ARRIVED, OpdTokenStatus.WAITING] } },
     order: [['token_number', 'ASC']],
   });
 
   if (!next) {
+    // Only complete the session when EVERY token is in a terminal state.
+    // If some tokens are still in ISSUED state (patients not yet arrived), keep the session active.
+    const pendingCount = await OpdToken.count({
+      where: {
+        session_id: sessionId,
+        status: { [Op.notIn]: [OpdTokenStatus.COMPLETED, OpdTokenStatus.CANCELLED, OpdTokenStatus.NO_SHOW, OpdTokenStatus.SKIPPED] },
+      },
+    });
+    if (pendingCount > 0) {
+      return ok({ message: 'No patients currently waiting.', session_completed: false, current_token: session.current_token });
+    }
     await session.update({ status: OpdSessionStatus.COMPLETED, actual_end_time: new Date().toTimeString().slice(0,5) });
     return ok({ message: 'All patients seen. Session completed.', session_completed: true });
   }

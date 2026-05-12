@@ -194,6 +194,21 @@ router.delete('/:sessionId/breaks/:breakId',  authenticate, requireRole(...STAFF
 
 // Token list + stats — staff + doctor
 router.get  ('/:sessionId/tokens',       authenticate, requireRole(...STAFF), validate(SessionIdSchema), asyncHandler(getTokens));
+
+// Mark a specific token as completed (receptionist override)
+const TokenCompleteSchema = z.object({
+  params: z.object({ sessionId: z.string().uuid(), tokenId: z.string().uuid() }),
+});
+router.patch('/:sessionId/tokens/:tokenId/complete',
+  authenticate, requireRole(...STAFF),
+  validate(TokenCompleteSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { sessionId, tokenId } = req.params as { sessionId: string; tokenId: string };
+    const result = await OpdService.markTokenComplete(sessionId, tokenId);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
 router.get  ('/:sessionId/stats',        authenticate, validate(SessionIdSchema), asyncHandler(getStats));
 
 // Public session info — shown to patient before/after QR scan (no token required)

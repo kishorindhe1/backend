@@ -120,6 +120,22 @@ async function updateQueueConfig(req: Request, res: Response): Promise<void> {
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 
+// Generate slots for a date range from the doctor's schedule config
+router.post(
+  '/generate',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(GenerateSlotsSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { doctor_id, hospital_id, from_date, to_date } = req.body as {
+      doctor_id: string; hospital_id: string; from_date: string; to_date: string;
+    };
+    const result = await ScheduleService.generateSlots(doctor_id, hospital_id, from_date, to_date);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendCreated(res, result.data);
+  }),
+);
+
 // Protected — staff list schedules for a doctor
 router.get(
   '/:doctorId/:hospitalId',
