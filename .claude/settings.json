@@ -21,7 +21,13 @@
       "Bash(node -e ' *)",
       "Bash(node dist/server.js)",
       "Bash(git push *)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(curl -s http://localhost:3000/api/v1/health)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s http://localhost:3000/api/v1/opd/history)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/healthcare-api log --oneline --follow -- src/modules/opd/opd.routes.ts)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/healthcare-api show e69a389 --name-only --oneline)",
+      "Bash(git -C /Users/kishorindhe/Desktop/production/healthcare-api show 5ab0891 --format=\"%ai %s\" -s)"
     ],
     "additionalDirectories": [
       "/Users/kishorindhe/Desktop/production",

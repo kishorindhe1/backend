@@ -98,6 +98,9 @@ export { HealthRecord, RecordType }        from './health-record.model';
 // ── Admin ──────────────────────────────────────────────────────────────────────
 export { AdminAuditLog, AdminAction }      from './admin-audit-log.model';
 
+// ── Banners ────────────────────────────────────────────────────────────────────
+export { Banner, BannerLinkType }          from './banner.model';
+
 // ── Patient Lookup ─────────────────────────────────────────────────────────────
 export { HospitalPatient }                 from './hospital-patient.model';
 export { HospitalCollection, CollectionMode } from './hospital-collection.model';

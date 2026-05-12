@@ -88,6 +88,23 @@ export const uploadPatientPhoto = cloudinaryEnabled
   ? multer({ storage: patientPhotoStorage, fileFilter: imageFilter, limits: { fileSize: 5 * 1024 * 1024 } }).single('photo')
   : multer().single('photo');
 
+// ── Banner image (Cloudinary — wide crop, optimized) ─────────────────────────
+
+const bannerStorage = cloudinaryEnabled
+  ? new CloudinaryStorage({
+      cloudinary,
+      params: async () => ({
+        folder:         'upcharify/banners',
+        format:         'webp',
+        transformation: [{ width: 1200, height: 480, crop: 'fill', gravity: 'center', quality: 'auto' }],
+      }) as Record<string, unknown>,
+    })
+  : (() => { throw new Error('Cloudinary not configured'); })();
+
+export const uploadBannerImage = cloudinaryEnabled
+  ? multer({ storage: bannerStorage, fileFilter: imageFilter, limits: { fileSize: 8 * 1024 * 1024 } }).single('image')
+  : multer().single('image');
+
 // ── Health records (local disk — PDFs + images, private) ─────────────────────
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'health-records');
