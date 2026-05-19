@@ -476,20 +476,30 @@ export async function getPublishedSlots(
   hospitalId: string,
   date:       string,
 ): Promise<ServiceResponse<object[]>> {
+  const nowIST         = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const todayIST       = nowIST.toISOString().split('T')[0];
+  const currentTimeIST = `${String(nowIST.getUTCHours()).padStart(2,'0')}:${String(nowIST.getUTCMinutes()).padStart(2,'0')}`;
 
+  if (date < todayIST) return ok([]);
+
+  // Skip cache for today — available slots shrink as time advances
+  const isToday  = date === todayIST;
   const cacheKey = RedisKeys.publishedSlots(doctorId, date);
-  const cached   = await redis.get(cacheKey);
-  if (cached) return ok(JSON.parse(cached));
 
-  const slots = await OpdSlotSession.findAll({
-    where: {
-      doctor_id:   doctorId,
-      hospital_id: hospitalId,
-      status:      OpdSlotStatus.PUBLISHED,
-      date,
-    },
-    order: [['slot_start_time', 'ASC']],
-  });
+  if (!isToday) {
+    const cached = await redis.get(cacheKey);
+    if (cached) return ok(JSON.parse(cached));
+  }
+
+  const where: Record<string, unknown> = {
+    doctor_id:   doctorId,
+    hospital_id: hospitalId,
+    status:      OpdSlotStatus.PUBLISHED,
+    date,
+  };
+  if (isToday) where.slot_start_time = { [Op.gt]: currentTimeIST };
+
+  const slots = await OpdSlotSession.findAll({ where, order: [['slot_start_time', 'ASC']] });
 
   const result = slots.map((s) => ({
     slot_id:          s.id,
@@ -501,7 +511,7 @@ export async function getPublishedSlots(
     status:           s.status,
   }));
 
-  await redis.setex(cacheKey, RedisTTL.PUBLISHED_SLOTS, JSON.stringify(result));
+  if (!isToday) await redis.setex(cacheKey, RedisTTL.PUBLISHED_SLOTS, JSON.stringify(result));
   return ok(result);
 }
 

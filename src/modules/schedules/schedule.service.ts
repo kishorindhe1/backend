@@ -1,3 +1,4 @@
+import { Op }                                         from 'sequelize';
 import { Schedule, DayOfWeek, OpdBookingModeConfig } from '../../models';
 import type { SessionsConfig } from '../../models';
 import { OpdSlotSession, OpdSlotStatus } from '../../models';
@@ -23,14 +24,30 @@ export async function getAvailableSlots(
   hospitalId: string,
   date: string,  // YYYY-MM-DD
 ): Promise<ServiceResponse<object[]>> {
-  const cacheKey = RedisKeys.publishedSlots(doctorId, date);
-  const cached   = await redis.get(cacheKey);
-  if (cached) return ok(JSON.parse(cached));
+  const nowIST         = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const todayIST       = nowIST.toISOString().split('T')[0];
+  const currentTimeIST = `${String(nowIST.getUTCHours()).padStart(2,'0')}:${String(nowIST.getUTCMinutes()).padStart(2,'0')}`;
 
-  const slots = await OpdSlotSession.findAll({
-    where: { doctor_id: doctorId, hospital_id: hospitalId, date, status: OpdSlotStatus.PUBLISHED },
-    order: [['slot_start_time', 'ASC']],
-  });
+  if (date < todayIST) return ok([]);
+
+  // Skip cache for today — slot availability changes minute-by-minute as time passes
+  const isToday  = date === todayIST;
+  const cacheKey = RedisKeys.publishedSlots(doctorId, date);
+
+  if (!isToday) {
+    const cached = await redis.get(cacheKey);
+    if (cached) return ok(JSON.parse(cached));
+  }
+
+  const where: Record<string, unknown> = {
+    doctor_id:   doctorId,
+    hospital_id: hospitalId,
+    date,
+    status:      OpdSlotStatus.PUBLISHED,
+  };
+  if (isToday) where.slot_start_time = { [Op.gt]: currentTimeIST };
+
+  const slots = await OpdSlotSession.findAll({ where, order: [['slot_start_time', 'ASC']] });
 
   const result = slots.map((s) => ({
     slot_id:          s.id,
@@ -42,7 +59,7 @@ export async function getAvailableSlots(
     status:           s.status,
   }));
 
-  await redis.setex(cacheKey, RedisTTL.PUBLISHED_SLOTS, JSON.stringify(result));
+  if (!isToday) await redis.setex(cacheKey, RedisTTL.PUBLISHED_SLOTS, JSON.stringify(result));
   return ok(result);
 }
 

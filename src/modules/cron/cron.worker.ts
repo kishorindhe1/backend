@@ -17,7 +17,8 @@ type CronJobType =
   | 'archive_daily_stats'
   | 'expire_approval_timeouts'
   | 'expire_pending_payments'
-  | 'auto_noshow_absent_patients';
+  | 'auto_noshow_absent_patients'
+  | 'auto_expire_sessions';
 
 // ── Cron queue ────────────────────────────────────────────────────────────────
 export const cronQueue = new Queue<{ type: CronJobType }>('cron', {
@@ -65,6 +66,9 @@ export async function scheduleCronJobs(): Promise<void> {
   await cronQueue.add('expire_pending_payments',      { type: 'expire_pending_payments' },      { repeat: { pattern: '*/5 * * * *' } });
   // Mark queue entries NO_SHOW if patient joined from app but never physically arrived after 30 min
   await cronQueue.add('auto_noshow_absent_patients',  { type: 'auto_noshow_absent_patients' },  { repeat: { pattern: '*/5 * * * *' } });
+
+  // Auto-expire sessions whose expected_end_time has passed — every 10 minutes
+  await cronQueue.add('auto_expire_sessions', { type: 'auto_expire_sessions' }, { repeat: { pattern: '*/10 * * * *' } });
 
   logger.info('⏰  Cron jobs scheduled');
 }
@@ -318,6 +322,62 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
         marked++;
       }
       if (marked > 0) logger.info('Auto no-show: absent app-queue patients', { marked });
+      break;
+    }
+
+    // ── Auto-expire sessions past their expected_end_time ────────────────────
+    case 'auto_expire_sessions': {
+      const { OpdSession, OpdSessionStatus, OpdToken, OpdTokenStatus } = await import('../../models');
+      const { Op } = await import('sequelize');
+
+      const nowIST         = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+      const todayIST       = nowIST.toISOString().split('T')[0];
+      const currentTimeIST = `${String(nowIST.getUTCHours()).padStart(2,'0')}:${String(nowIST.getUTCMinutes()).padStart(2,'0')}`;
+
+      const staleSessions = await OpdSession.findAll({
+        where: {
+          status: { [Op.in]: [OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE, OpdSessionStatus.PAUSED] },
+          [Op.or]: [
+            { session_date: { [Op.lt]: todayIST } },
+            { session_date: todayIST, expected_end_time: { [Op.lte]: currentTimeIST } },
+          ],
+        },
+      });
+
+      let completed = 0, cancelled = 0;
+      for (const session of staleSessions) {
+        try {
+          if (session.status === OpdSessionStatus.SCHEDULED) {
+            // Never started — cancel it
+            await session.update({ status: OpdSessionStatus.CANCELLED });
+            cancelled++;
+          } else {
+            // ACTIVE or PAUSED — complete only when no tokens are still pending
+            // (or session is from a previous day — force-complete regardless)
+            const isPastDate   = session.session_date < todayIST;
+            const pendingCount = isPastDate ? 0 : await OpdToken.count({
+              where: {
+                session_id: session.id,
+                status: { [Op.notIn]: [OpdTokenStatus.COMPLETED, OpdTokenStatus.CANCELLED, OpdTokenStatus.NO_SHOW, OpdTokenStatus.SKIPPED] },
+              },
+            });
+
+            if (pendingCount === 0) {
+              await session.update({
+                status:          OpdSessionStatus.COMPLETED,
+                actual_end_time: session.actual_end_time ?? currentTimeIST,
+              });
+              completed++;
+            }
+          }
+        } catch (err) {
+          logger.error('Auto-expire session error', { sessionId: session.id, err });
+        }
+      }
+
+      if (completed > 0 || cancelled > 0) {
+        logger.info('Auto-expired sessions', { completed, cancelled });
+      }
       break;
     }
 

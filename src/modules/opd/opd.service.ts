@@ -808,16 +808,29 @@ export async function listAvailableSessions(
   hospital_id: string,
   date:        string,
 ): Promise<ServiceResponse<object[]>> {
-  const sessions = await OpdSession.findAll({
-    where: {
-      doctor_id,
-      hospital_id,
-      session_date: date,
-      booking_mode: OpdBookingMode.TOKEN_BASED,
-      status: { [Op.in]: [OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE, OpdSessionStatus.PAUSED] },
-    },
-    order: [['start_time', 'ASC']],
-  });
+  const nowIST         = new Date(Date.now() + 5.5 * 60 * 60 * 1000);
+  const todayIST       = nowIST.toISOString().split('T')[0];
+  const currentTimeIST = `${String(nowIST.getUTCHours()).padStart(2,'0')}:${String(nowIST.getUTCMinutes()).padStart(2,'0')}`;
+
+  // Past dates have no bookable sessions
+  if (date < todayIST) return ok([]);
+
+  const where: Record<string, unknown> = {
+    doctor_id,
+    hospital_id,
+    session_date: date,
+    booking_mode: OpdBookingMode.TOKEN_BASED,
+    status: { [Op.in]: [OpdSessionStatus.SCHEDULED, OpdSessionStatus.ACTIVE, OpdSessionStatus.PAUSED] },
+  };
+
+  // For today: only show sessions that haven't started yet (start_time in the future)
+  // and whose window hasn't closed — prevents booking into an already-running session
+  if (date === todayIST) {
+    where.start_time        = { [Op.gt]: currentTimeIST };
+    where.expected_end_time = { [Op.gt]: currentTimeIST };
+  }
+
+  const sessions = await OpdSession.findAll({ where, order: [['start_time', 'ASC']] });
 
   const result = sessions.map((s) => {
     const issued            = s.tokens_issued ?? 0;
