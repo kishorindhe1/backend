@@ -94,9 +94,9 @@ const bannerStorage = cloudinaryEnabled
   ? new CloudinaryStorage({
       cloudinary,
       params: async () => ({
-        folder:         'upcharify/banners',
-        format:         'webp',
-        transformation: [{ width: 1200, height: 480, crop: 'fill', gravity: 'center', quality: 'auto' }],
+        folder:   'upcharify/banners',
+        format:   'webp',
+        quality:  'auto',
       }) as Record<string, unknown>,
     })
   : (() => { throw new Error('Cloudinary not configured'); })();
