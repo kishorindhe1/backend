@@ -1,11 +1,10 @@
 import { Op }                          from 'sequelize';
-import { redis, RedisKeys, RedisTTL }  from '../../config/redis';
+import { redis, RedisKeys }            from '../../config/redis';
 import {
   ConsultationQueue, QueueStatus,
   Appointment, AppointmentStatus, AppointmentType, PaymentMode, PaymentStatus,
   DoctorProfile, Hospital,
   DoctorDelayEvent, DelayStatus,
-  UserNotificationPreference,
   User, PatientProfile,
   OpdSession, OpdSessionStatus,
   DoctorHospitalAffiliation,
@@ -13,7 +12,16 @@ import {
 }                                       from '../../models';
 import { ServiceResponse, ok, fail }    from '../../types';
 import { logger }                       from '../../utils/logger';
-import { getEffectiveDuration }         from '../duration/duration.service';
+
+
+// IST = UTC+5:30. All date/time comparisons use IST so session dates
+// match what the hospital staff sees on their local clock.
+function todayIST(): string {
+  return new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+}
+function nowHHMMIST(): string {
+  return new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().substring(11, 16);
+}
 
 export interface QueueStateResult {
   appointment_id:           string;
@@ -128,7 +136,7 @@ export async function getDoctorDayQueue(
   date:       string,
 ): Promise<ServiceResponse<object[]>> {
   const entries = await ConsultationQueue.findAll({
-    where: { doctor_id: doctorId, queue_date: date },
+    where: { doctor_id: doctorId, hospital_id: hospitalId, queue_date: date },
     include: [{
       model: Appointment,
       as: 'appointment',
@@ -172,7 +180,7 @@ export async function getQueueDisplay(
   const cached = await redis.get(cacheKey);
   if (cached) return ok(JSON.parse(cached) as QueueDisplayResult);
 
-  const date = new Date().toISOString().split('T')[0];
+  const date = todayIST();
 
   const [doctor, hospital, entries, delayEvent] = await Promise.all([
     DoctorProfile.findByPk(doctorId, { attributes: ['full_name', 'specialization'] }),
@@ -227,7 +235,7 @@ export async function getHospitalQueueDisplay(
   const cached = await redis.get(cacheKey);
   if (cached) return ok(JSON.parse(cached) as HospitalDisplayResult);
 
-  const date = new Date().toISOString().split('T')[0];
+  const date = todayIST();
 
   const hospital = await Hospital.findByPk(hospitalId, { attributes: ['name', 'city'] });
   if (!hospital) return fail('NOT_FOUND', 'Hospital not found.', 404);
@@ -296,7 +304,10 @@ export async function getLiveStatus(
   estimated_wait_minutes: number;
   session_id:             string | null;
 }>> {
-  const today = new Date().toISOString().split('T')[0];
+  const closed = ok({ is_open: false, queue_count: 0, estimated_wait_minutes: 0, session_id: null });
+
+  const today  = todayIST();
+  const nowHHMM = nowHHMMIST();
 
   const session = await OpdSession.findOne({
     where: {
@@ -305,27 +316,31 @@ export async function getLiveStatus(
       session_date: today,
       status:       OpdSessionStatus.ACTIVE,
     },
-    attributes: ['id', 'total_tokens', 'tokens_issued'],
+    attributes: ['id', 'total_tokens', 'tokens_issued', 'expected_end_time'],
   });
 
-  if (!session) return ok({ is_open: false, queue_count: 0, estimated_wait_minutes: 0, session_id: null });
+  if (!session) return closed;
+
+  // Session exists but its scheduled end time has already passed — treat as closed.
+  // This handles the case where staff forgot to mark the session completed.
+  if (session.expected_end_time && nowHHMM > session.expected_end_time) return closed;
 
   const queueCount = await ConsultationQueue.count({
     where: {
-      doctor_id:  doctorId,
-      queue_date: today,
-      status:     { [Op.in]: [QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.IN_CONSULTATION] },
+      doctor_id:   doctorId,
+      hospital_id: hospitalId,
+      queue_date:  today,
+      status:      { [Op.in]: [QueueStatus.WAITING, QueueStatus.CALLED, QueueStatus.IN_CONSULTATION] },
     },
   });
 
-  const doctor = await DoctorProfile.findByPk(doctorId, { attributes: ['avg_consultation_minutes', 'no_show_rate_historical'] });
+  const doctor = await DoctorProfile.findByPk(doctorId, { attributes: ['avg_consultation_minutes'] });
   const avgMin = doctor?.avg_consultation_minutes ?? 15;
-  const estimatedWait = Math.round(queueCount * avgMin);
 
   return ok({
     is_open:                true,
     queue_count:            queueCount,
-    estimated_wait_minutes: estimatedWait,
+    estimated_wait_minutes: Math.round(queueCount * avgMin),
     session_id:             session.id,
   });
 }
@@ -402,8 +417,6 @@ export async function joinQueueFromApp(
     doctor_payout:    parseFloat((fee * 0.98).toFixed(2)),
     notes:            procedureNote,
   });
-
-  const durationSnapshot = await getEffectiveDuration(patientId, doctorId);
 
   const nextPosition = (await ConsultationQueue.count({ where: { doctor_id: doctorId, queue_date: today } })) + 1;
   await ConsultationQueue.create({
