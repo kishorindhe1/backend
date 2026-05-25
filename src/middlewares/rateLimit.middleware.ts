@@ -57,5 +57,5 @@ export const globalRateLimiter = rateLimit({
     });
   },
 });
-export const authRateLimiter    = createLimiter({ windowMs: 15 * 60 * 1000, max: 5,  keyPrefix: 'auth',    message: 'Too many authentication attempts.' });
+export const authRateLimiter    = createLimiter({ windowMs: 15 * 60 * 1000, max: 50, keyPrefix: 'auth',    message: 'Too many authentication attempts.' });
 export const bookingRateLimiter = createLimiter({ windowMs: 60 * 60 * 1000, max: 20, keyPrefix: 'booking', message: 'Too many booking attempts.' });
