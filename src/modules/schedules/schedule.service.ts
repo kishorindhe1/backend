@@ -216,6 +216,11 @@ export async function generateSlots(
   if (!rows.length) return ok({ generated: 0 });
 
   const created = await OpdSlotSession.bulkCreate(rows as any, { ignoreDuplicates: true });
+
+  // Invalidate cached slot lists for every date that had rows inserted
+  const affectedDates = [...new Set(rows.map((r) => r.date))];
+  await Promise.all(affectedDates.map((d) => redis.del(RedisKeys.publishedSlots(doctorId, d))));
+
   logger.info('Slots generated', { doctorId, hospitalId, fromDate, toDate, generated: created.length });
   return ok({ generated: created.length });
 }
