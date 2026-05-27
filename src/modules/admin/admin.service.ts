@@ -473,7 +473,7 @@ export async function rescheduleAppointmentAsAdmin(
       });
       if (!newSlot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'New slot not found.');
       if (newSlot.status !== OpdSlotStatus.PUBLISHED) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'Slot already booked.');
-      const newSlotDateTime = new Date(`${newSlot.date}T${newSlot.slot_start_time}:00`);
+      const newSlotDateTime = new Date(`${newSlot.date}T${newSlot.slot_start_time}:00+05:30`);
       if (newSlotDateTime < new Date()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
 
       if (appointment.slot_id) {

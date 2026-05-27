@@ -271,7 +271,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       const prefSlot = await OpdSlotSession.findByPk(slot_id, { attributes: ['date', 'slot_start_time'] });
       if (prefSlot) {
         const now      = new Date();
-        const slotTime = new Date(`${prefSlot.date}T${prefSlot.slot_start_time}:00`).getTime();
+        const slotTime = new Date(`${prefSlot.date}T${prefSlot.slot_start_time}:00+05:30`).getTime();
 
         if (pref.min_booking_lead_hours > 0 && slotTime - now.getTime() < pref.min_booking_lead_hours * 3_600_000) {
           throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
@@ -303,7 +303,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       if (slot.status !== OpdSlotStatus.PUBLISHED) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot has already been booked.');
       const slotDateTimeStr = `${slot.date}T${slot.slot_start_time}:00`;
       if (slotDateTimeStr < localNowDateTime()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot book a past slot.');
-      const slotDateTime = new Date(slotDateTimeStr);
+      const slotDateTime = new Date(`${slot.date}T${slot.slot_start_time}:00+05:30`);
 
       const affiliation = await DoctorHospitalAffiliation.findOne({ where: { doctor_id, hospital_id, is_active: true }, transaction: t });
       if (!affiliation) throw ErrorFactory.unprocessable('DOCTOR_NOT_AFFILIATED', 'Doctor is not affiliated with this hospital.');
@@ -543,7 +543,7 @@ export async function rescheduleAppointment(
     const newSlotForCheck = await OpdSlotSession.findByPk(newSlotId, { attributes: ['date', 'slot_start_time'] });
     if (newSlotForCheck) {
       const now      = new Date();
-      const slotTime = new Date(`${newSlotForCheck.date}T${newSlotForCheck.slot_start_time}:00`).getTime();
+      const slotTime = new Date(`${newSlotForCheck.date}T${newSlotForCheck.slot_start_time}:00+05:30`).getTime();
       if (pref.min_booking_lead_hours > 0 && slotTime - now.getTime() < pref.min_booking_lead_hours * 3_600_000) {
         throw ErrorFactory.unprocessable('BOOKING_TOO_LATE', `This doctor requires at least ${pref.min_booking_lead_hours}h advance booking.`);
       }
@@ -570,7 +570,7 @@ export async function rescheduleAppointment(
       });
       if (!newSlot) throw ErrorFactory.notFound('SLOT_NOT_FOUND', 'New slot not found.');
       if (newSlot.status !== OpdSlotStatus.PUBLISHED) throw ErrorFactory.conflict('SLOT_UNAVAILABLE', 'This slot has already been booked.');
-      const newSlotDateTime = new Date(`${newSlot.date}T${newSlot.slot_start_time}:00`);
+      const newSlotDateTime = new Date(`${newSlot.date}T${newSlot.slot_start_time}:00+05:30`);
       if (`${newSlot.date}T${newSlot.slot_start_time}:00` < localNowDateTime()) throw ErrorFactory.unprocessable('SLOT_IN_PAST', 'Cannot reschedule to a past slot.');
 
       // Free the old slot

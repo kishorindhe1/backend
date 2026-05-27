@@ -82,7 +82,7 @@ export async function rebuildDoctorIndex(doctorId: string, hospitalId: string): 
     where: { doctor_id: doctorId, hospital_id: hospitalId, status: OpdSlotStatus.PUBLISHED, date: { [Op.gte]: today } },
     order: [['date', 'ASC'], ['slot_start_time', 'ASC']],
   });
-  const nextSlotDatetime = nextSlot ? new Date(`${nextSlot.date}T${nextSlot.slot_start_time}:00`) : null;
+  const nextSlotDatetime = nextSlot ? new Date(`${nextSlot.date}T${nextSlot.slot_start_time}:00+05:30`) : null;
 
   const normalized = doctor.full_name
     .toLowerCase()
@@ -178,7 +178,7 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
           order: [['date', 'ASC'], ['slot_start_time', 'ASC']],
         }),
       ]);
-      const nextSlot = nextSlotRow ? new Date(`${nextSlotRow.date}T${nextSlotRow.slot_start_time}:00`) : null;
+      const nextSlot = nextSlotRow ? new Date(`${nextSlotRow.date}T${nextSlotRow.slot_start_time}:00+05:30`) : null;
 
       const normalized = doctor.full_name.toLowerCase().replace(/^dr\.?\s*/i, '').trim();
       const wilson     = wilsonScore(Number(doctor.reliability_score), 0);
