@@ -110,6 +110,11 @@ async function sendViaMSG91(mobile: string, otp: string): Promise<string> {
 // ── sendSMS — MSG91 only (OTP permission only) ────────────────────────────────
 
 export async function sendSMS(mobile: string, otp: string): Promise<{ provider: string; msgId: string }> {
+  if (env.DISABLE_SMS === 'true') {
+    logger.info(`📵  [SMS SKIPPED → ${mobile}] OTP: ${otp}`);
+    return { provider: 'disabled', msgId: `sms_disabled_${Date.now()}` };
+  }
+
   if (await isCircuitOpen('msg91')) {
     throw new Error('MSG91 circuit breaker is open');
   }

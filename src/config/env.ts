@@ -74,6 +74,7 @@ const envSchema = z.object({
   // AWS SES
   AWS_SES_FROM_EMAIL:    z.string().optional(),  // must be a verified identity in SES
   AWS_SES_FROM_NAME:     z.string().default('Upcharify'),
+  DISABLE_SMS:           z.enum(['true', 'false']).default('false'),
 
   // AWS SNS SMS
   AWS_SNS_SENDER_ID:     z.string().default('UPCHARY'),   // registered DLT sender ID (max 11 chars)
