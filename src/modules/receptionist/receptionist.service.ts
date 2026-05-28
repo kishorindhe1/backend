@@ -129,6 +129,25 @@ export async function startConsultation(
   return ok({ message: 'Consultation started.', started_at: new Date() });
 }
 
+// ── Complete consultation ─────────────────────────────────────────────────────
+export async function completeConsultation(
+  appointmentId: string,
+): Promise<ServiceResponse<object>> {
+  const entry = await ConsultationQueue.findOne({ where: { appointment_id: appointmentId } });
+  if (!entry) throw ErrorFactory.notFound('QUEUE_ENTRY_NOT_FOUND', 'Queue entry not found.');
+  if (entry.status === QueueStatus.COMPLETED) return fail('ALREADY_COMPLETED', 'Consultation already completed.', 409);
+  if (entry.status !== QueueStatus.IN_CONSULTATION) return fail('NOT_IN_CONSULTATION', 'Patient is not in consultation.', 409);
+
+  const now = new Date();
+  await entry.update({ status: QueueStatus.COMPLETED, actual_end_at: now });
+  await Appointment.update({ status: AppointmentStatus.COMPLETED }, { where: { id: appointmentId } });
+  await updateAvgConsultationTime(entry.doctor_id, { ...entry.toJSON(), actual_end_at: now } as ConsultationQueue);
+  await invalidateQueueCache(entry.doctor_id, entry.queue_date);
+
+  logger.info('Consultation completed', { appointmentId });
+  return ok({ message: 'Consultation completed.', completed_at: now });
+}
+
 // ── Skip patient ──────────────────────────────────────────────────────────────
 export async function skipPatient(
   appointmentId: string,

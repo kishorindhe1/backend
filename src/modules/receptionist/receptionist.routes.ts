@@ -93,6 +93,12 @@ async function startConsultation(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function completeConsultation(req: Request, res: Response): Promise<void> {
+  const result = await ReceptionistService.completeConsultation(param(req, 'appointmentId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function skipPatient(req: Request, res: Response): Promise<void> {
   const { reason } = req.body as { reason?: string };
   const result = await ReceptionistService.skipPatient(param(req, 'appointmentId'), reason);
@@ -188,6 +194,7 @@ router.use(authenticate, requireRole(...STAFF));
 // Queue management
 router.patch('/appointments/:appointmentId/arrived',       validate(ApptIdSchema),   asyncHandler(markArrived));
 router.patch('/appointments/:appointmentId/start',         validate(ApptIdSchema),   asyncHandler(startConsultation));
+router.patch('/appointments/:appointmentId/complete',      validate(ApptIdSchema),   asyncHandler(completeConsultation));
 router.patch('/appointments/:appointmentId/skip',          validate(ApptIdSchema),   asyncHandler(skipPatient));
 router.post ('/doctors/:doctorId/:hospitalId/call-next',   validate(DoctorIdSchema), asyncHandler(callNext));
 
