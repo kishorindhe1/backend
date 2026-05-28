@@ -1,5 +1,6 @@
 import { Op, QueryTypes }               from 'sequelize';
-import { sequelize }                    from '../../config/database';
+import { istDate }                      from '../../utils/dateTime';
+import { sequelize, sequelizeRead }     from '../../config/database';
 import { redis }                        from '../../config/redis';
 import {
   User,
@@ -39,7 +40,7 @@ export async function getPlatformHealth(): Promise<ServiceResponse<object>> {
     redis.get('stats:today:payments:failed'),
   ]);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = istDate();
 
   // Live counts from DB (small queries — not aggregates)
   const [activeDoctors, totalHospitals, patientsInQueue] = await Promise.all([
@@ -78,7 +79,7 @@ export async function getPlatformHealth(): Promise<ServiceResponse<object>> {
 
 // ── Operations alerts ─────────────────────────────────────────────────────────
 export async function getOperationsAlerts(): Promise<ServiceResponse<object[]>> {
-  const today      = new Date().toISOString().split('T')[0];
+  const today      = istDate();
   const now        = new Date();
   const alerts: object[] = [];
 
@@ -805,7 +806,7 @@ export async function getRevenueTimeSeries(
     labelFormat = 'DD Mon';
   }
 
-  const rows = await sequelize.query<{
+  const rows = await sequelizeRead.query<{
     label: string; gmv: string; revenue: string; transactions: string;
   }>(
     `SELECT

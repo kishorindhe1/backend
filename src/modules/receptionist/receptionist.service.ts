@@ -22,6 +22,7 @@ import { ErrorFactory }               from '../../utils/errors';
 import { enqueueNotification } from '../notifications/notification.service';
 import { invalidateQueueCache }       from '../queue/queue.service';
 import { logger }                     from '../../utils/logger';
+import { istDate }                    from '../../utils/dateTime';
 
 // ── Mark patient arrived at clinic ────────────────────────────────────────────
 export async function markPatientArrived(
@@ -53,7 +54,7 @@ export async function callNextPatient(
   doctorId:   string,
   hospitalId: string,
 ): Promise<ServiceResponse<object>> {
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   // Complete current in-progress if any
   const inProgress = await ConsultationQueue.findOne({
@@ -150,7 +151,7 @@ export async function doctorCheckIn(
   hospitalId:      string,
   reportedByUserId:string,
 ): Promise<ServiceResponse<object>> {
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   // Resolve any active delay event
   await DoctorDelayEvent.update(
@@ -171,7 +172,7 @@ export async function reportDoctorDelay(
   reason:          string | undefined,
   reportedByUserId:string,
 ): Promise<ServiceResponse<object>> {
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   // Close any existing delay event
   await DoctorDelayEvent.update(
@@ -264,7 +265,7 @@ export async function markDoctorAbsent(
   reason:          string | undefined,
   reportedByUserId:string,
 ): Promise<ServiceResponse<object>> {
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   await DoctorDelayEvent.create({
     doctor_id:        doctorId,
@@ -315,7 +316,7 @@ export interface WalkInInput {
 
 export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<object>> {
   const { doctor_id, hospital_id, patient_mobile, receptionist_id, notes } = input;
-  const today = new Date().toISOString().split('T')[0];
+  const today = istDate();
 
   // Walk-ins require an active OPD session — consistent with joinQueueFromApp
   const { OpdSession, OpdSessionStatus } = await import('../../models');
@@ -362,7 +363,7 @@ export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<ob
   });
 
   // Add to queue
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
   const last = await ConsultationQueue.findOne({
     where: { doctor_id, queue_date: date }, order: [['queue_position', 'DESC']],
   });
@@ -402,7 +403,7 @@ export async function issueWalkInToken(input: WalkInTokenInput): Promise<Service
   message: string;
 }>> {
   const { doctor_id, hospital_id, patient_id, patient_name, created_by } = input;
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   // Next token number for today
   const last = await WalkInToken.findOne({
@@ -561,7 +562,7 @@ export async function quickRegister(input: QuickRegisterInput): Promise<ServiceR
   const existing = await User.findOne({ where: { mobile } });
   if (existing) return fail('MOBILE_TAKEN', 'A patient with this mobile number already exists. Use patient lookup.', 409);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = istDate();
 
   const result = await sequelize.transaction(async (t) => {
     const user = await User.create({
@@ -628,7 +629,7 @@ export interface StartVisitInput {
 export async function startVisit(input: StartVisitInput): Promise<ServiceResponse<object>> {
   const { patient_id, hospital_id, doctor_id, created_by, patient_name } = input;
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = istDate();
 
   // Upsert hospital_patients record
   const existing = await HospitalPatient.findOne({ where: { hospital_id, patient_id } });

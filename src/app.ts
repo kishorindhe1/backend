@@ -2,9 +2,9 @@ import express, { Application } from 'express';
 import cors    from 'cors';
 import helmet  from 'helmet';
 import morgan  from 'morgan';
-import path    from 'path';
 import { requestIdMiddleware }  from './middlewares/requestId.middleware';
 import { globalRateLimiter }    from './middlewares/rateLimit.middleware';
+import { metricsMiddleware }    from './middlewares/metrics.middleware';
 import { errorMiddleware, notFoundMiddleware } from './middlewares/error.middleware';
 import { morganStream }         from './utils/logger';
 import { setupSwagger } from './config/swagger';
@@ -20,18 +20,26 @@ export function createApp(): Application {
   // ── 1. Request ID — must be FIRST ─────────────────────────────────────────
   app.use(requestIdMiddleware);
 
-  // ── 2. HTTP request logging ───────────────────────────────────────────────
+  // ── 2. HTTP request logging + Prometheus metrics ─────────────────────────
   app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev', { stream: morganStream }));
+  app.use(metricsMiddleware);
 
   // ── 3. Security headers ───────────────────────────────────────────────────
   app.use(helmet());
 
   // ── 4. CORS ───────────────────────────────────────────────────────────────
+  const allowedOrigins = env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean);
   app.use(cors({
-    origin: env.NODE_ENV === 'production' ? ['https://yourdomain.com'] : '*',
+    origin: env.NODE_ENV === 'production'
+      ? (origin, cb) => {
+          if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+          cb(new Error(`CORS: origin ${origin} not allowed`));
+        }
+      : '*',
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Idempotency-Key'],
     exposedHeaders: ['X-Request-ID', 'RateLimit-Limit', 'RateLimit-Remaining'],
+    credentials: true,
   }));
 
   // ── 5. Global rate limiter ────────────────────────────────────────────────
@@ -51,10 +59,7 @@ export function createApp(): Application {
   // ── 8. Swagger docs (dev/staging only)
   setupSwagger(app);
 
-  // ── 8. Static files — uploaded health records ────────────────────────────
-  app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
-
-  // ── 8. API routes ─────────────────────────────────────────────────────────
+  // ── 9. API routes ─────────────────────────────────────────────────────────
   app.use('/api/v1', router);
 
   // ── 9. 404 handler ────────────────────────────────────────────────────────

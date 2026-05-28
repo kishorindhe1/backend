@@ -6,6 +6,7 @@ import { JwtAccessPayload }          from '../../types';
 import { asyncHandler }              from '../../utils/asyncHandler';
 import { z }                         from 'zod';
 import { validate }                  from '../../middlewares/validate.middleware';
+import { istDate }                   from '../../utils/dateTime';
 
 const param = (req: Request, k: string) => String((req.params as Record<string,string>)[k] ?? '');
 const qs    = (req: Request, k: string, d = '') => String((req.query as Record<string,string>)[k] ?? d);
@@ -22,7 +23,7 @@ async function getDoctorDayQueue(req: Request, res: Response): Promise<void> {
   const result = await QueueService.getDoctorDayQueue(
     param(req, 'doctorId'),
     param(req, 'hospitalId'),
-    qs(req, 'date', new Date().toISOString().split('T')[0]),
+    qs(req, 'date', istDate()),
   );
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
   sendSuccess(res, result.data);

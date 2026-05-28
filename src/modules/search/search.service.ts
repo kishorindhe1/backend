@@ -1,5 +1,5 @@
 import { Op, QueryTypes } from 'sequelize';
-import { sequelize }        from '../../config/database';
+import { sequelize, sequelizeRead } from '../../config/database';
 import { redis }            from '../../config/redis';
 import {
   DoctorSearchIndex,
@@ -11,6 +11,7 @@ import {
 }                           from '../../models';
 import { ServiceResponse, ok } from '../../types';
 import { logger }              from '../../utils/logger';
+import { istDate }             from '../../utils/dateTime';
 
 // ── Cache TTLs ────────────────────────────────────────────────────────────────
 const TTL = {
@@ -70,7 +71,7 @@ export async function rebuildDoctorIndex(doctorId: string, hospitalId: string): 
 
   if (!doctor || !affil || !hospital) return;
 
-  const today    = new Date().toISOString().split('T')[0];
+  const today    = istDate();
   const todayStart = new Date(`${today}T00:00:00.000Z`);
   const todayEnd   = new Date(`${today}T23:59:59.999Z`);
 
@@ -158,7 +159,7 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
     ],
   });
 
-  const today      = new Date().toISOString().split('T')[0];
+  const today      = istDate();
   const todayStart = new Date(`${today}T00:00:00.000Z`);
   const todayEnd   = new Date(`${today}T23:59:59.999Z`);
   let updated = 0, errors = 0;

@@ -6,6 +6,7 @@ import { ProfileStatus, AccountStatus, ServiceResponse, ok, fail } from '../../t
 import { getMissingFields, getCompletionPercentage } from '../../utils/helpers';
 import { CompleteProfileInput, UpdateProfileInput }  from './patient.validation';
 import { logger } from '../../utils/logger';
+import { encryptField, decryptField } from '../../utils/encryption';
 
 export async function getMyProfile(userId: string): Promise<ServiceResponse<object>> {
   const user    = await User.findByPk(userId);
@@ -60,7 +61,7 @@ export async function createHealthRecord(userId: string, input: {
     file_name:   input.file_name,
     file_size:   input.file_size ?? null,
     mime_type:   input.mime_type ?? null,
-    notes:       input.notes    ?? null,
+    notes:       encryptField(input.notes),
     record_date: input.record_date ? new Date(input.record_date) : null,
   });
   return ok(record);
@@ -84,7 +85,7 @@ export async function getHealthRecords(
   // Map to the field names expected by the mobile app
   const mapped = rows.map(r => {
     const json = r.toJSON() as Record<string, unknown>;
-    return { ...json, name: json.title, recorded_at: json.record_date };
+    return { ...json, notes: decryptField(json.notes as string), name: json.title, recorded_at: json.record_date };
   });
 
   return ok({ rows: mapped, count });
@@ -93,7 +94,8 @@ export async function getHealthRecords(
 export async function getHealthRecord(userId: string, recordId: string): Promise<ServiceResponse<object>> {
   const record = await HealthRecord.findOne({ where: { id: recordId, patient_id: userId } });
   if (!record) return fail('RECORD_NOT_FOUND', 'Health record not found.', 404);
-  return ok(record);
+  const json = record.toJSON() as Record<string, unknown>;
+  return ok({ ...json, notes: decryptField(json.notes as string) });
 }
 
 export async function deleteHealthRecord(userId: string, recordId: string): Promise<ServiceResponse<{ message: string }>> {

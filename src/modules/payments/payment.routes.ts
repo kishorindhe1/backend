@@ -6,6 +6,7 @@ import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload }   from '../../types';
 import { asyncHandler }       from '../../utils/asyncHandler';
 import { z }                  from 'zod';
+import { idempotency }        from '../../middlewares/idempotency.middleware';
 
 // ── Validation ────────────────────────────────────────────────────────────────
 const InitiateSchema = z.object({
@@ -79,8 +80,8 @@ async function paymentHistory(req: Request, res: Response): Promise<void> {
 const router = Router();
 
 router.get ('/history',    authenticate, asyncHandler(paymentHistory));
-router.post('/initiate',   authenticate, validate(InitiateSchema), asyncHandler(initiatePayment));
-router.post('/verify',     authenticate, validate(VerifySchema),   asyncHandler(verifyPayment));
+router.post('/initiate',   authenticate, idempotency, validate(InitiateSchema), asyncHandler(initiatePayment));
+router.post('/verify',     authenticate, idempotency, validate(VerifySchema),   asyncHandler(verifyPayment));
 router.post('/refund',     authenticate, validate(z.object({ body: z.object({ appointment_id: z.string().uuid() }) })), asyncHandler(refundPayment));
 router.post('/webhook/razorpay', asyncHandler(razorpayWebhook));   // no auth — Razorpay calls this
 

@@ -111,7 +111,7 @@ async function sendViaMSG91(mobile: string, otp: string): Promise<string> {
 
 export async function sendSMS(mobile: string, otp: string): Promise<{ provider: string; msgId: string }> {
   if (env.DISABLE_SMS === 'true') {
-    logger.info(`📵  [SMS SKIPPED → ${mobile}] OTP: ${otp}`);
+    logger.info('SMS skipped (DISABLE_SMS=true)', { mobile });
     return { provider: 'disabled', msgId: `sms_disabled_${Date.now()}` };
   }
 

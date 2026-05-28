@@ -1,132 +1,98 @@
 import multer, { FileFilterCallback } from 'multer';
-import path from 'path';
-import fs from 'fs';
 import { Request } from 'express';
 import { v2 as cloudinary } from 'cloudinary';
 import { CloudinaryStorage } from 'multer-storage-cloudinary';
 import { env } from '../config/env';
 
 // ── Cloudinary config ─────────────────────────────────────────────────────────
+// All file uploads go through Cloudinary — no local disk storage.
+// This ensures multi-instance deploys share the same files and data
+// is not lost on container restarts.
 
 const cloudinaryEnabled =
   !!env.CLOUDINARY_CLOUD_NAME && !!env.CLOUDINARY_API_KEY && !!env.CLOUDINARY_API_SECRET;
 
 if (cloudinaryEnabled) {
   cloudinary.config({
-    cloud_name: env.CLOUDINARY_CLOUD_NAME,
-    api_key:    env.CLOUDINARY_API_KEY,
-    api_secret: env.CLOUDINARY_API_SECRET,
+    cloud_name: env.CLOUDINARY_CLOUD_NAME!,
+    api_key:    env.CLOUDINARY_API_KEY!,
+    api_secret: env.CLOUDINARY_API_SECRET!,
   });
 }
 
-function requireCloudinary(name: string): CloudinaryStorage {
+function requireCloudinaryStorage(
+  folder:  string,
+  params?: Record<string, unknown>,
+): CloudinaryStorage {
   if (!cloudinaryEnabled) {
-    throw new Error(`Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET to use ${name} uploads.`);
+    throw new Error(
+      'Cloudinary credentials not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET.',
+    );
   }
   return new CloudinaryStorage({
     cloudinary,
-    params: async (_req, _file) => ({}) as Record<string, unknown>,
+    params: async () => ({ folder, ...params }) as Record<string, unknown>,
   });
 }
 
-// ── Image file filter ─────────────────────────────────────────────────────────
+// ── File filters ──────────────────────────────────────────────────────────────
 
 function imageFilter(_req: Request, file: Express.Multer.File, cb: FileFilterCallback) {
-  const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-  if (allowed.includes(file.mimetype)) cb(null, true);
+  if (['image/jpeg', 'image/jpg', 'image/png', 'image/webp'].includes(file.mimetype)) cb(null, true);
   else cb(new Error('Only JPEG, PNG and WebP images are allowed.'));
 }
 
-// ── Doctor profile photo ──────────────────────────────────────────────────────
-
-const doctorPhotoStorage = cloudinaryEnabled
-  ? new CloudinaryStorage({
-      cloudinary,
-      params: async () => ({
-        folder:         'upcharify/doctors',
-        format:         'webp',
-        transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face', quality: 'auto' }],
-      }) as Record<string, unknown>,
-    })
-  : (() => { throw new Error('Cloudinary not configured'); })();
-
-export const uploadDoctorPhoto = cloudinaryEnabled
-  ? multer({ storage: doctorPhotoStorage, fileFilter: imageFilter, limits: { fileSize: 5 * 1024 * 1024 } }).single('photo')
-  : multer().single('photo');
-
-// ── Hospital logo ─────────────────────────────────────────────────────────────
-
-const hospitalLogoStorage = cloudinaryEnabled
-  ? new CloudinaryStorage({
-      cloudinary,
-      params: async () => ({
-        folder:         'upcharify/hospitals',
-        format:         'webp',
-        transformation: [{ width: 600, height: 400, crop: 'fill', quality: 'auto' }],
-      }) as Record<string, unknown>,
-    })
-  : (() => { throw new Error('Cloudinary not configured'); })();
-
-export const uploadHospitalLogo = cloudinaryEnabled
-  ? multer({ storage: hospitalLogoStorage, fileFilter: imageFilter, limits: { fileSize: 5 * 1024 * 1024 } }).single('logo')
-  : multer().single('logo');
-
-// ── Patient profile photo ─────────────────────────────────────────────────────
-
-const patientPhotoStorage = cloudinaryEnabled
-  ? new CloudinaryStorage({
-      cloudinary,
-      params: async () => ({
-        folder:         'upcharify/patients',
-        format:         'webp',
-        transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face', quality: 'auto' }],
-      }) as Record<string, unknown>,
-    })
-  : (() => { throw new Error('Cloudinary not configured'); })();
-
-export const uploadPatientPhoto = cloudinaryEnabled
-  ? multer({ storage: patientPhotoStorage, fileFilter: imageFilter, limits: { fileSize: 5 * 1024 * 1024 } }).single('photo')
-  : multer().single('photo');
-
-// ── Banner image (Cloudinary — wide crop, optimized) ─────────────────────────
-
-const bannerStorage = cloudinaryEnabled
-  ? new CloudinaryStorage({
-      cloudinary,
-      params: async () => ({
-        folder:   'upcharify/banners',
-        format:   'webp',
-        quality:  'auto',
-      }) as Record<string, unknown>,
-    })
-  : (() => { throw new Error('Cloudinary not configured'); })();
-
-export const uploadBannerImage = cloudinaryEnabled
-  ? multer({ storage: bannerStorage, fileFilter: imageFilter, limits: { fileSize: 8 * 1024 * 1024 } }).single('image')
-  : multer().single('image');
-
-// ── Health records (local disk — PDFs + images, private) ─────────────────────
-
-const UPLOAD_DIR = path.join(process.cwd(), 'uploads', 'health-records');
-if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-
-const diskStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
-  filename:    (_req, file, cb) => {
-    const ext  = path.extname(file.originalname);
-    const name = `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
-    cb(null, name);
-  },
-});
-
 function recordFilter(_req: Request, file: Express.Multer.File, cb: FileFilterCallback) {
-  const allowed = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
-  if (allowed.includes(file.mimetype)) cb(null, true);
-  else cb(new Error('Only PDF, JPEG and PNG files are allowed.'));
+  if (['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'].includes(file.mimetype)) cb(null, true);
+  else cb(new Error('Only PDF, JPEG and PNG files are allowed for health records.'));
 }
 
+// ── Doctor profile photo ──────────────────────────────────────────────────────
+export const uploadDoctorPhoto = multer({
+  storage:    requireCloudinaryStorage('upcharify/doctors', {
+    format:         'webp',
+    transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face', quality: 'auto' }],
+  }),
+  fileFilter: imageFilter,
+  limits:     { fileSize: 5 * 1024 * 1024 },
+}).single('photo');
+
+// ── Hospital logo ─────────────────────────────────────────────────────────────
+export const uploadHospitalLogo = multer({
+  storage:    requireCloudinaryStorage('upcharify/hospitals', {
+    format:         'webp',
+    transformation: [{ width: 600, height: 400, crop: 'fill', quality: 'auto' }],
+  }),
+  fileFilter: imageFilter,
+  limits:     { fileSize: 5 * 1024 * 1024 },
+}).single('logo');
+
+// ── Patient profile photo ─────────────────────────────────────────────────────
+export const uploadPatientPhoto = multer({
+  storage:    requireCloudinaryStorage('upcharify/patients', {
+    format:         'webp',
+    transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face', quality: 'auto' }],
+  }),
+  fileFilter: imageFilter,
+  limits:     { fileSize: 5 * 1024 * 1024 },
+}).single('photo');
+
+// ── Banner image ──────────────────────────────────────────────────────────────
+export const uploadBannerImage = multer({
+  storage:    requireCloudinaryStorage('upcharify/banners', { format: 'webp', quality: 'auto' }),
+  fileFilter: imageFilter,
+  limits:     { fileSize: 8 * 1024 * 1024 },
+}).single('image');
+
+// ── Health records — stored in Cloudinary private folder ─────────────────────
+// Previously stored on local disk; now on Cloudinary so files survive redeploys
+// and are accessible from any instance.
 export const uploadHealthRecordFile = multer({
-  storage:    diskStorage,
+  storage:    requireCloudinaryStorage('upcharify/health-records', {
+    resource_type: 'auto',  // allows PDFs
+    type:          'private', // not publicly accessible by URL
+    access_mode:   'authenticated',
+  }),
   fileFilter: recordFilter,
   limits:     { fileSize: 10 * 1024 * 1024 },
 }).single('file');

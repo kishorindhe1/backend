@@ -1,8 +1,11 @@
-import { createApp }       from './app';
-import { connectDatabase } from './config/database';
-import { connectRedis }    from './config/redis';
-import { env }             from './config/env';
-import { logger }          from './utils/logger';
+import http                 from 'http';
+import { createApp }        from './app';
+import { connectDatabase }  from './config/database';
+import { connectRedis }      from './config/redis';
+import { initRateLimiters }  from './middlewares/rateLimit.middleware';
+import { initSocket }        from './config/socket';
+import { env }               from './config/env';
+import { logger }            from './utils/logger';
 
 // Single import — registers ALL models + ALL associations in dependency order
 import './models/index';
@@ -12,6 +15,7 @@ async function bootstrap(): Promise<void> {
     logger.info(`🏥  Healthcare API starting — ${env.NODE_ENV} mode`);
     await connectDatabase();
     await connectRedis();
+    await initRateLimiters();
 
     // Start async workers (after Redis is ready)
     const { startNotificationWorker } = await import('./modules/notifications/notification.service');
@@ -22,10 +26,14 @@ async function bootstrap(): Promise<void> {
     await scheduleCronJobs();
 
     const app    = createApp();
-    const server = app.listen(env.PORT, () => {
+    const server = http.createServer(app);
+    initSocket(server);
+
+    server.listen(env.PORT, () => {
       logger.info(`🚀  Server running on http://localhost:${env.PORT}`);
       logger.info(`📋  Health: http://localhost:${env.PORT}/api/v1/health`);
       logger.info(`🔍  Search: http://localhost:${env.PORT}/api/v1/search/doctors`);
+      logger.info(`🔌  WebSocket ready on ws://localhost:${env.PORT}`);
     });
 
     const shutdown = async (signal: string): Promise<void> => {

@@ -4,6 +4,7 @@ import { authenticate, requireRole } from '../../middlewares/auth.middleware';
 import { requireCompleteProfile }    from '../../middlewares/profileGuard.middleware';
 import { validate }                  from '../../middlewares/validate.middleware';
 import { bookingRateLimiter }        from '../../middlewares/rateLimit.middleware';
+import { idempotency }               from '../../middlewares/idempotency.middleware';
 import {
   BookAppointmentSchema,
   CancelAppointmentSchema,
@@ -18,11 +19,12 @@ const router = Router();
 
 router.use(authenticate);
 
-// Book — requires complete profile + booking rate limit
+// Book — requires complete profile + booking rate limit + idempotency
 router.post(
   '/',
   requireCompleteProfile,
   bookingRateLimiter,
+  idempotency,
   validate(BookAppointmentSchema),
   asyncHandler(AppointmentController.bookAppointment),
 );

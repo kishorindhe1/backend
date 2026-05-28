@@ -49,7 +49,6 @@ export async function requestOtp(mobile: string, countryCode = '+91'): Promise<S
     expires_in:       env.OTP_EXPIRY_MINUTES * 60,
     resend_allowed_in:RedisTTL.OTP_COOLDOWN,
     masked_mobile:    maskMobile(mobile),
-    ...(env.OTP_BYPASS_CODE ? { dev_otp: otp } : {}),
   });
 }
 

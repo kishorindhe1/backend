@@ -182,7 +182,18 @@ export function startNotificationWorker(): Worker {
   });
 
   worker.on('completed', (job) => logger.debug('Notification job done', { id: job.id }));
-  worker.on('failed',    (job, err) => logger.error('Notification job failed', { id: job?.id, err }));
+  worker.on('failed', (job, err) => {
+    logger.error('Notification job failed', { id: job?.id, attempts: job?.attemptsMade, err });
+    // Count exhausted jobs (all retries used) — picked up by Prometheus
+    if (job && job.attemptsMade >= (job.opts?.attempts ?? 5)) {
+      import('../../config/metrics').then(({ bullmqFailedJobs }) => {
+        bullmqFailedJobs.inc({ queue: 'notifications' });
+      }).catch(() => {});
+      logger.error('Notification job permanently failed — manual review needed', {
+        id: job.id, type: job.name, userId: (job.data as any)?.userId,
+      });
+    }
+  });
 
   logger.info('📬  Notification worker started');
   return worker;

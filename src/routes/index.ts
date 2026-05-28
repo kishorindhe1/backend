@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { getMetrics, getContentType } from '../config/metrics';
 import { DoctorProfile, Hospital, DoctorReview } from '../models';
 import { VerificationStatus } from '../models/doctor.model';
 import authRoutes          from '../modules/auth/auth.routes';
@@ -49,6 +50,12 @@ router.get('/stats', async (_req: Request, res: Response) => {
   } catch {
     res.json({ success: true, data: { total_doctors: 0, total_hospitals: 0, avg_rating: 0 } });
   }
+});
+
+// ── Prometheus metrics — internal only (restrict in nginx/load-balancer) ──────
+router.get('/metrics', async (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', getContentType());
+  res.end(await getMetrics());
 });
 
 router.get('/health', (_req: Request, res: Response) => {

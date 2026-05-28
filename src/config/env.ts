@@ -17,6 +17,10 @@ const envSchema = z.object({
   DB_POOL_MAX: z.string().default('10').transform(Number),
   DB_POOL_MIN: z.string().default('2').transform(Number),
 
+  // Read replica — set these to route analytics/search reads to a replica
+  DB_READ_HOST: z.string().optional(),
+  DB_READ_PORT: z.string().default('5432').transform(Number),
+
   // Redis
   REDIS_HOST:     z.string().default('localhost'),
   REDIS_PORT:     z.string().default('6379').transform(Number),
@@ -88,6 +92,14 @@ const envSchema = z.object({
 
   // Admin panel URL (used in invite emails)
   ADMIN_PANEL_URL: z.string().default('https://admin.upcharify.com'),
+
+  // Encryption — AES-256-GCM key for PII fields (health record notes, appointment notes)
+  // Must be a 64-char hex string (32 bytes) or any string (will be SHA-256 derived)
+  ENCRYPTION_KEY: z.string().min(16).optional(),
+
+  // CORS — comma-separated list of allowed origins in production
+  // e.g. https://admin.upcharify.com,https://app.upcharify.com
+  ALLOWED_ORIGINS: z.string().default('https://admin.upcharify.com,https://app.upcharify.com'),
 
   // Cloudinary — image uploads (doctor photos, hospital logos, patient photos)
   CLOUDINARY_CLOUD_NAME: z.string().optional(),

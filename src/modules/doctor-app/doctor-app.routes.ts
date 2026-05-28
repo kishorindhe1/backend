@@ -6,6 +6,7 @@ import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { UserRole }                   from '../../types';
 import { asyncHandler }               from '../../utils/asyncHandler';
 import { z }                          from 'zod';
+import { istDate }                    from '../../utils/dateTime';
 
 const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
 const timeRegex = /^\d{2}:\d{2}$/;
@@ -104,7 +105,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const doctorId   = (req as any).user.sub as string;
     const hospitalId = (req.params as any).hospitalId as string;
-    const date = (req.query as any).date as string ?? new Date().toISOString().split('T')[0];
+    const date = (req.query as any).date as string ?? istDate();
     const result = await DoctorAppService.getDoctorOwnQueue(doctorId, hospitalId, date);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
@@ -141,7 +142,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const doctorId   = (req as any).user.sub as string;
     const hospitalId = (req.params as any).hospitalId as string;
-    const date = (req.query as any).date as string ?? new Date().toISOString().split('T')[0];
+    const date = (req.query as any).date as string ?? istDate();
     const result = await DoctorAppService.getGapTimeline(doctorId, hospitalId, date);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);

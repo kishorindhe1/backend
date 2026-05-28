@@ -12,6 +12,7 @@ import {
 }                                       from '../../models';
 import { ServiceResponse, ok, fail }    from '../../types';
 import { logger }                       from '../../utils/logger';
+import { istDate }                      from '../../utils/dateTime';
 
 
 // IST = UTC+5:30. All date/time comparisons use IST so session dates
@@ -357,7 +358,7 @@ export async function joinQueueFromApp(
   queue_position:         number;
   estimated_wait_minutes: number;
 }>> {
-  const today = new Date().toISOString().split('T')[0];
+  const today = istDate();
 
   // Must have an active OPD session
   const session = await OpdSession.findOne({

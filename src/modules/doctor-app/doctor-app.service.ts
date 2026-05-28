@@ -13,6 +13,7 @@ import { logger }                          from '../../utils/logger';
 import { invalidateQueueCache }            from '../queue/queue.service';
 import { enqueueNotification }             from '../notifications/notification.service';
 import { NotificationChannel }             from '../../models';
+import { istDate }                         from '../../utils/dateTime';
 
 const JS_DAY_TO_ENUM: DayOfWeek[] = [
   DayOfWeek.SUNDAY, DayOfWeek.MONDAY, DayOfWeek.TUESDAY,
@@ -57,7 +58,7 @@ export async function selfReportDelay(
   delayMinutes: number,
   reason?:      string,
 ): Promise<ServiceResponse<{ delay_event_id: string; patients_notified: number }>> {
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   // Resolve any existing active delay first
   await DoctorDelayEvent.update(
@@ -119,7 +120,7 @@ export async function selfCheckIn(
   doctorId:   string,
   hospitalId: string,
 ): Promise<ServiceResponse<{ checked_in_at: string }>> {
-  const date = new Date().toISOString().split('T')[0];
+  const date = istDate();
 
   await DoctorDelayEvent.update(
     { status: DelayStatus.RESOLVED, actual_arrival: new Date() },

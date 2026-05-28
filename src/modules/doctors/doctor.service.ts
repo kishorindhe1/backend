@@ -8,6 +8,7 @@ import { Schedule }          from '../../models';
 import { OpdSlotSession, OpdSlotStatus } from '../../models';
 import { UserRole, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { logger }            from '../../utils/logger';
+import { istDate }           from '../../utils/dateTime';
 
 // ── Register doctor and affiliate to a hospital ───────────────────────────────
 export interface RegisterDoctorInput {
@@ -132,7 +133,7 @@ export async function getDoctorProfile(doctorProfileId: string): Promise<Service
   const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
   const endOfToday   = new Date(); endOfToday.setHours(23, 59, 59, 999);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = istDate();
   const slotsToday = await OpdSlotSession.count({
     where: {
       doctor_id: doctorProfileId,
