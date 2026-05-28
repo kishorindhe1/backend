@@ -20,6 +20,7 @@ const GetSlotsSchema = z.object({
 });
 
 const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+const timeRegex = /^\d{2}:\d{2}$/;
 
 const GenerateSlotsSchema = z.object({
   body: z.object({
@@ -68,6 +69,19 @@ async function getAdminSlots(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+
+async function generateForDateHandler(req: Request, res: Response): Promise<void> {
+  const { doctor_id, hospital_id, date, start_time, end_time, slot_duration_minutes } =
+    req.body as {
+      doctor_id: string; hospital_id: string; date: string;
+      start_time?: string; end_time?: string; slot_duration_minutes?: number;
+    };
+  const result = await ScheduleService.generateSlotsForDate(
+    doctor_id, hospital_id, date, start_time, end_time, slot_duration_minutes,
+  );
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}
 
 async function blockSlotHandler(req: Request, res: Response): Promise<void> {
   const { slotId } = req.params as { slotId: string };
@@ -134,6 +148,31 @@ router.post(
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendCreated(res, result.data);
   }),
+);
+
+// Generate slots for a specific date — with optional custom start/end/duration
+// Falls back to weekly template if custom times are not provided
+router.post(
+  '/generate-date',
+  authenticate,
+  requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(z.object({
+    body: z.object({
+      doctor_id:              z.string().uuid(),
+      hospital_id:            z.string().uuid(),
+      date:                   z.string().regex(dateRegex, 'date must be YYYY-MM-DD'),
+      start_time:             z.string().regex(timeRegex).optional(),
+      end_time:               z.string().regex(timeRegex).optional(),
+      slot_duration_minutes:  z.number().int().min(5).max(120).optional(),
+    }).refine(
+      (b) => {
+        const hasCustom = b.start_time || b.end_time || b.slot_duration_minutes;
+        return !hasCustom || (b.start_time && b.end_time && b.slot_duration_minutes);
+      },
+      { message: 'Provide all of start_time, end_time, slot_duration_minutes together or none.' },
+    ),
+  })),
+  asyncHandler(generateForDateHandler),
 );
 
 // Protected — staff list schedules for a doctor

@@ -225,6 +225,101 @@ export async function generateSlots(
   return ok({ generated: created.length });
 }
 
+// ── Generate slots for a specific date (with optional custom times) ───────────
+// If start_time/end_time/duration provided → custom ad-hoc slots (no template needed)
+// Otherwise → falls back to the weekly template for that day_of_week
+export async function generateSlotsForDate(
+  doctorId:   string,
+  hospitalId: string,
+  date:       string,  // YYYY-MM-DD
+  startTime?: string,  // HH:MM — optional custom override
+  endTime?:   string,
+  slotDurationMinutes?: number,
+): Promise<ServiceResponse<{ generated: number; source: 'template' | 'custom' }>> {
+
+  function pad2(n: number)        { return String(n).padStart(2, '0'); }
+  function toHHMM(m: number)      { return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`; }
+
+  type SlotRow = {
+    doctor_id: string; hospital_id: string; schedule_id: string | null;
+    date: string; slot_start_time: string; slot_end_time: string;
+    duration_minutes: number; custom_added: boolean;
+    status: OpdSlotStatus; published_at: Date;
+  };
+
+  const rows: SlotRow[] = [];
+
+  if (startTime && endTime && slotDurationMinutes) {
+    // ── Custom ad-hoc slot generation (no weekly template required) ────────
+    const [stH, stM] = startTime.split(':').map(Number);
+    const [enH, enM] = endTime.split(':').map(Number);
+    const endMins    = enH * 60 + enM;
+    let   cursor     = stH * 60 + stM;
+    const dur        = slotDurationMinutes;
+
+    while (cursor + dur <= endMins) {
+      rows.push({
+        doctor_id: doctorId, hospital_id: hospitalId, schedule_id: null,
+        date, slot_start_time: toHHMM(cursor), slot_end_time: toHHMM(cursor + dur),
+        duration_minutes: dur, custom_added: true,
+        status: OpdSlotStatus.PUBLISHED, published_at: new Date(),
+      });
+      cursor += dur;
+    }
+
+    if (!rows.length) return ok({ generated: 0, source: 'custom' });
+
+    const created = await OpdSlotSession.bulkCreate(rows as any, { ignoreDuplicates: true });
+    await redis.del(RedisKeys.publishedSlots(doctorId, date));
+    logger.info('Custom date slots generated', { doctorId, hospitalId, date, generated: created.length });
+    return ok({ generated: created.length, source: 'custom' });
+
+  } else {
+    // ── Fall back to weekly template for this day_of_week ─────────────────
+    const DAY_MAP: Record<number, string> = {
+      0: 'sunday', 1: 'monday', 2: 'tuesday', 3: 'wednesday',
+      4: 'thursday', 5: 'friday', 6: 'saturday',
+    };
+    const dayName  = DAY_MAP[new Date(date + 'T00:00:00').getDay()];
+    const schedules = await Schedule.findAll({
+      where: { doctor_id: doctorId, hospital_id: hospitalId, is_active: true, day_of_week: dayName },
+    });
+
+    if (!schedules.length) {
+      return fail(
+        'NO_SCHEDULE_FOR_DATE',
+        `No active ${dayName} schedule found. Provide custom start/end/duration to generate without a template.`,
+        404,
+      );
+    }
+
+    for (const sch of schedules) {
+      const [enH, enM] = sch.end_time.split(':').map(Number);
+      const endMins    = enH * 60 + enM;
+      const dur        = sch.slot_duration_minutes;
+      const [stH, stM] = sch.start_time.split(':').map(Number);
+      let   cursor     = stH * 60 + stM;
+
+      while (cursor + dur <= endMins) {
+        rows.push({
+          doctor_id: doctorId, hospital_id: hospitalId, schedule_id: sch.id,
+          date, slot_start_time: toHHMM(cursor), slot_end_time: toHHMM(cursor + dur),
+          duration_minutes: dur, custom_added: false,
+          status: OpdSlotStatus.PUBLISHED, published_at: new Date(),
+        });
+        cursor += dur;
+      }
+    }
+
+    if (!rows.length) return ok({ generated: 0, source: 'template' });
+
+    const created = await OpdSlotSession.bulkCreate(rows as any, { ignoreDuplicates: true });
+    await redis.del(RedisKeys.publishedSlots(doctorId, date));
+    logger.info('Date slots generated from template', { doctorId, hospitalId, date, dayName, generated: created.length });
+    return ok({ generated: created.length, source: 'template' });
+  }
+}
+
 // ── Block a slot (doctor leave, holiday) ─────────────────────────────────────
 export async function blockSlot(
   slotId: string,
