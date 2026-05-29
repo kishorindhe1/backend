@@ -23,6 +23,9 @@ export const OpdEvents = {
   SESSION_STARTED:    'opd:session_started',
   SESSION_ENDED:      'opd:session_ended',
   DOCTOR_DELAY:       'opd:doctor_delay',
+  // slot lifecycle — emitted to hospital room
+  SLOT_BOOKED:        'slot:booked',
+  SLOT_CANCELLED:     'slot:cancelled',
   // client → server
   JOIN_SESSION:       'opd:join_session',
   JOIN_HOSPITAL:      'opd:join_hospital',

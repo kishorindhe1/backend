@@ -1,7 +1,10 @@
 import { Op }                                         from 'sequelize';
 import { Schedule, DayOfWeek, OpdBookingModeConfig } from '../../models';
 import type { SessionsConfig } from '../../models';
-import { OpdSlotSession, OpdSlotStatus } from '../../models';
+import {
+  OpdSlotSession, OpdSlotStatus,
+  Appointment, User, PatientProfile,
+}                                        from '../../models';
 import { redis, RedisKeys, RedisTTL }    from '../../config/redis';
 import { ServiceResponse, ok, fail }     from '../../types';
 import { logger }                        from '../../utils/logger';
@@ -63,7 +66,7 @@ export async function getAvailableSlots(
   return ok(result);
 }
 
-// ── Get ALL slots for admin view (all statuses) ───────────────────────────────
+// ── Get ALL slots for admin view (all statuses + patient info on booked slots) ─
 export async function getAllSlotsForAdmin(
   doctorId: string,
   hospitalId: string,
@@ -72,17 +75,47 @@ export async function getAllSlotsForAdmin(
   const slots = await OpdSlotSession.findAll({
     where: { doctor_id: doctorId, hospital_id: hospitalId, date },
     order: [['slot_start_time', 'ASC']],
+    include: [{
+      model:    Appointment,
+      as:       'appointment',
+      required: false,
+      attributes: ['id', 'status', 'payment_status', 'appointment_type', 'consultation_fee'],
+      include: [{
+        model:    User,
+        as:       'patient',
+        required: false,
+        attributes: ['mobile'],
+        include: [{
+          model:    PatientProfile,
+          as:       'patientProfile',
+          required: false,
+          attributes: ['full_name'],
+        }],
+      }],
+    }],
   });
 
-  return ok(slots.map((s) => ({
-    slot_id:          s.id,
-    slot_datetime:    `${s.date}T${s.slot_start_time}:00`,
-    slot_start_time:  s.slot_start_time,
-    slot_end_time:    s.slot_end_time,
-    duration_minutes: s.duration_minutes,
-    status:           s.status,
-    blocked_reason:   s.blocked_reason,
-  })));
+  return ok(slots.map((s) => {
+    const appt       = s.get('appointment') as (Appointment & { patient?: User & { patientProfile?: PatientProfile } }) | null;
+    const patientUser = appt?.get('patient') as (User & { patientProfile?: PatientProfile }) | null;
+    const patientName  = (patientUser?.get('patientProfile') as PatientProfile | null)?.full_name ?? null;
+
+    return {
+      slot_id:          s.id,
+      slot_datetime:    `${s.date}T${s.slot_start_time}:00`,
+      slot_start_time:  s.slot_start_time,
+      slot_end_time:    s.slot_end_time,
+      duration_minutes: s.duration_minutes,
+      status:           s.status,
+      blocked_reason:   s.blocked_reason,
+      appointment_id:   s.appointment_id ?? null,
+      patient_name:     patientName,
+      patient_phone:    patientUser?.mobile ?? null,
+      payment_status:   appt?.payment_status ?? null,
+      appointment_type: appt?.appointment_type ?? null,
+      consultation_fee: appt ? Number(appt.consultation_fee) : null,
+    };
+  }));
 }
 
 // ── Unblock a slot ────────────────────────────────────────────────────────────

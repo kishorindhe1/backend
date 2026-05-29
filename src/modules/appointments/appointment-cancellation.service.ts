@@ -15,6 +15,7 @@ import { logger }                         from '../../utils/logger';
 import { invalidateQueueCache }           from '../queue/queue.service';
 import { enqueueNotification }            from '../notifications/notification.service';
 import { NotificationChannel }            from '../../models';
+import { emit, OpdRooms, OpdEvents }     from '../../config/socket';
 
 export async function cancelAppointment(
   appointmentId: string,
@@ -63,6 +64,13 @@ export async function cancelAppointment(
 
   const dateStr = appointment.scheduled_at.toISOString().split('T')[0];
   await redis.del(RedisKeys.publishedSlots(appointment.doctor_id, dateStr));
+
+  emit(OpdRooms.hospital(appointment.hospital_id), OpdEvents.SLOT_CANCELLED, {
+    slot_id:    appointment.slot_id,
+    doctor_id:  appointment.doctor_id,
+    hospital_id: appointment.hospital_id,
+    date:       dateStr,
+  });
 
   await ConsultationQueue.update({ status: QueueStatus.CANCELLED }, { where: { appointment_id: appointmentId } });
   await invalidateQueueCache(appointment.doctor_id, dateStr);

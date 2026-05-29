@@ -403,6 +403,24 @@ export const templates: Record<string, TemplateSet> = {
     ),
   },
 
+  // ── Slot review reminder — sent to hospital admin/receptionist ───────────
+  review_reminder: {
+    subject: `Action Required: Review Tomorrow's Slots – ${BRAND.name}`,
+    sms: `Reminder: Tomorrow's slot schedule is awaiting your review on Upcharify Admin. Please review and publish before 9 PM. -UPCHARIFY`,
+    html: (d) => layout(
+      'Tomorrow\'s Slots Need Review',
+      'Please review and publish tomorrow\'s slot schedule before 9 PM.',
+      `
+      ${alertBox(`&#9203;&nbsp; Tomorrow's slot schedule for <strong>${String(d.date)}</strong> is awaiting review.`)}
+      ${h1('Action Required')}
+      ${p('Draft slots have been generated for tomorrow and require your review before they are published to patients.')}
+      ${p('Please log in to the admin panel and review the slots before <strong>9:00 PM</strong> tonight. Any unreviewed slots will be auto-published at 9 PM.', 'font-size:14px;')}
+      ${divider()}
+      ${p('Log in at your hospital admin panel to review.', 'color:#9ca3af;font-size:13px;')}
+    `,
+    ),
+  },
+
   // ── Appointment reminder ──────────────────────────────────────────────────
   appointment_reminder: {
     subject: `Appointment Reminder – ${BRAND.name}`,

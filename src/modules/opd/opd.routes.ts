@@ -1,11 +1,17 @@
 import { Router, Request, Response } from 'express';
+import { Op }                         from 'sequelize';
 import * as OpdService                from './opd.service';
-import { OpdSessionStatus }          from '../../models';
+import {
+  OpdSession, OpdSessionStatus,
+  OpdToken, OpdTokenStatus,
+  DoctorProfile, Hospital,
+}                                     from '../../models';
 import { authenticate, requireRole }  from '../../middlewares/auth.middleware';
 import { validate }                   from '../../middlewares/validate.middleware';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
 import { JwtAccessPayload, UserRole } from '../../types';
 import { asyncHandler }               from '../../utils/asyncHandler';
+import { PENDING_STATUSES }           from './opd-helpers';
 import { z }                          from 'zod';
 
 const param = (req: Request, k: string) => String((req.params as Record<string,string>)[k] ?? '');
@@ -128,6 +134,80 @@ const AvailableSessionsSchema = z.object({
 });
 
 const router = Router();
+
+// Public — live queue state via SSE (patients + waiting-room display screens)
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+router.get('/queue/:hospitalId/:doctorId', async (req: Request, res: Response) => {
+  const { hospitalId, doctorId } = req.params as { hospitalId: string; doctorId: string };
+
+  if (!UUID_RE.test(hospitalId) || !UUID_RE.test(doctorId)) {
+    res.status(400).json({ success: false, error: { code: 'INVALID_IDS', message: 'Invalid hospitalId or doctorId.' } });
+    return;
+  }
+
+  res.setHeader('Content-Type',   'text/event-stream');
+  res.setHeader('Cache-Control',  'no-cache');
+  res.setHeader('Connection',     'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const push = async () => {
+    try {
+      const todayIST = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().split('T')[0];
+
+      const session = await OpdSession.findOne({
+        where: {
+          doctor_id:    doctorId,
+          hospital_id:  hospitalId,
+          session_date: todayIST,
+          status: { [Op.in]: [OpdSessionStatus.ACTIVE, OpdSessionStatus.SCHEDULED, OpdSessionStatus.PAUSED] },
+        },
+        include: [
+          { model: DoctorProfile, as: 'doctor',   attributes: ['full_name', 'specialization'] },
+          { model: Hospital,      as: 'hospital',  attributes: ['name'] },
+        ],
+        order: [['start_time', 'ASC']],
+      });
+
+      if (!session) {
+        res.write(`data: ${JSON.stringify({ status: 'no_session', date: todayIST })}\n\n`);
+        return;
+      }
+
+      const [waitingCount, nextTokens] = await Promise.all([
+        OpdToken.count({
+          where: { session_id: session.id, status: { [Op.in]: PENDING_STATUSES } },
+        }),
+        OpdToken.findAll({
+          where: { session_id: session.id, status: { [Op.in]: [OpdTokenStatus.ARRIVED, OpdTokenStatus.WAITING, OpdTokenStatus.ISSUED] } },
+          order: [['token_number', 'ASC']],
+          limit: 5,
+          attributes: ['token_number'],
+        }),
+      ]);
+
+      res.write(`data: ${JSON.stringify({
+        session_id:    session.id,
+        status:        session.status,
+        current_token: session.current_token,
+        waiting_count: waitingCount,
+        next_tokens:   nextTokens.map((t) => t.token_number),
+        avg_minutes:   Number(session.avg_time_per_patient),
+        doctor:        session.get('doctor'),
+        hospital:      session.get('hospital'),
+        date:          session.session_date,
+        start_time:    session.start_time,
+      })}\n\n`);
+    } catch { /* swallow transient DB errors — client just gets stale data */ }
+  };
+
+  await push();
+  const ticker    = setInterval(push, 5000);
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), 25000);
+
+  req.on('close', () => { clearInterval(ticker); clearInterval(heartbeat); });
+});
 
 // Public — patient sees available queue sessions before booking
 router.get('/available', validate(AvailableSessionsSchema), asyncHandler(async (req: Request, res: Response) => {

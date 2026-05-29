@@ -6,6 +6,10 @@ import { validate }                       from '../../middlewares/validate.middl
 import { sendSuccess, sendError }         from '../../utils/response';
 import { JwtAccessPayload, UserRole }     from '../../types';
 import { asyncHandler }                   from '../../utils/asyncHandler';
+import {
+  Appointment, User, PatientProfile,
+  DoctorProfile, OpdSlotSession,
+}                                         from '../../models';
 import { z }                              from 'zod';
 
 const param = (req: Request, k: string) => String((req.params as Record<string, string>)[k] ?? '');
@@ -132,6 +136,69 @@ router.get('/appointments',
   }),
 );
 
+// Single appointment detail — used by admin panel slot/appointment drawer
+router.get('/appointments/:id',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  validate(z.object({ params: z.object({ id: z.string().uuid() }) })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const appt = await Appointment.findByPk(param(req, 'id'), {
+      include: [
+        {
+          model: User, as: 'patient', attributes: ['id', 'mobile'],
+          include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name', 'gender', 'date_of_birth'], required: false }],
+        },
+        { model: DoctorProfile, as: 'doctor', attributes: ['id', 'full_name', 'specialization'] },
+        { model: OpdSlotSession, as: 'slot', attributes: ['slot_start_time', 'slot_end_time', 'date'], required: false },
+      ],
+    });
+    if (!appt) { sendError(res, 404, { code: 'NOT_FOUND', message: 'Appointment not found.' }); return; }
+
+    const scopeId = scopedHospitalId(req);
+    if (scopeId && appt.hospital_id !== scopeId) {
+      sendError(res, 403, { code: 'FORBIDDEN', message: 'This appointment does not belong to your hospital.' });
+      return;
+    }
+
+    const patientUser   = appt.get('patient') as (User & { patientProfile?: PatientProfile }) | null;
+    const patientProfile = patientUser?.get('patientProfile') as PatientProfile | null;
+    const doctor         = appt.get('doctor') as DoctorProfile | null;
+    const slot           = appt.get('slot') as OpdSlotSession | null;
+
+    sendSuccess(res, {
+      id:               appt.id,
+      status:           appt.status,
+      payment_status:   appt.payment_status,
+      appointment_type: appt.appointment_type,
+      payment_mode:     appt.payment_mode,
+      consultation_fee: Number(appt.consultation_fee),
+      platform_fee:     Number(appt.platform_fee),
+      scheduled_at:     appt.scheduled_at,
+      cancelled_at:     appt.cancelled_at,
+      cancellation_reason: appt.cancellation_reason,
+      chief_complaint:  appt.chief_complaint,
+      visit_type:       appt.visit_type,
+      priority_tier:    appt.priority_tier,
+      patient: patientUser ? {
+        id:            patientUser.id,
+        mobile:        patientUser.mobile,
+        full_name:     patientProfile?.full_name ?? null,
+        gender:        patientProfile?.gender ?? null,
+        date_of_birth: patientProfile?.date_of_birth ?? null,
+      } : null,
+      doctor: doctor ? {
+        id:             doctor.id,
+        full_name:      doctor.full_name,
+        specialization: doctor.specialization,
+      } : null,
+      slot: slot ? {
+        date:           slot.date,
+        start_time:     slot.slot_start_time,
+        end_time:       slot.slot_end_time,
+      } : null,
+    });
+  }),
+);
+
 // Reschedule an appointment (with hospital scope check)
 router.put('/appointments/:id/reschedule',
   requirePermission(Permission.APPOINTMENTS_READ),
@@ -219,6 +286,23 @@ router.put('/doctors/:id/primary-hospital',
     const result = await AdminService.setPrimaryHospital(param(req, 'id'), hospital_id, user.sub);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
+  }),
+);
+
+// Toggle doctor discoverability in patient-facing search
+router.patch('/doctors/:id/discovery',
+  requirePermission(Permission.DOCTORS_MANAGE),
+  validate(z.object({
+    params: z.object({ id: z.string().uuid() }),
+    body:   z.object({ is_discoverable: z.boolean() }),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { is_discoverable } = req.body as { is_discoverable: boolean };
+    const { DoctorProfile: DoctorProfileModel } = await import('../../models');
+    const doctor = await DoctorProfileModel.findByPk(param(req, 'id'));
+    if (!doctor) { sendError(res, 404, { code: 'NOT_FOUND', message: 'Doctor not found.' }); return; }
+    await doctor.update({ is_discoverable });
+    sendSuccess(res, { id: doctor.id, is_discoverable: doctor.is_discoverable });
   }),
 );
 
@@ -365,6 +449,93 @@ router.patch('/patients/:id/status',
     const result = await AdminService.updatePatientStatus(param(req, 'id'), action, user.sub);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
+  }),
+);
+
+// Pending approval count — badge indicator for sidebar nav
+router.get('/pending-approvals/count',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { Appointment, AppointmentStatus: ApptStatus } = await import('../../models');
+    const scopeId = scopedHospitalId(req);
+    const where: Record<string, unknown> = { status: ApptStatus.AWAITING_HOSPITAL_APPROVAL };
+    if (scopeId) where.hospital_id = scopeId;
+    const count = await Appointment.count({ where });
+    sendSuccess(res, { count });
+  }),
+);
+
+// Waitlist admin — list entries with patient details scoped by hospital
+router.get('/waitlist',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { WaitlistEntry, DoctorProfile, User, PatientProfile } = await import('../../models');
+    const scopeId = scopedHospitalId(req);
+    if (!scopeId) { sendError(res, 400, { code: 'NO_HOSPITAL', message: 'hospital_id is required.' }); return; }
+
+    const date     = qs(req, 'date') || undefined;
+    const doctorId = qs(req, 'doctor_id') || undefined;
+    const status   = qs(req, 'status') || undefined;
+
+    const where: Record<string, unknown> = { hospital_id: scopeId };
+    if (date)     where.date      = date;
+    if (doctorId) where.doctor_id = doctorId;
+    if (status)   where.status    = status;
+
+    const entries = await WaitlistEntry.findAll({
+      where,
+      order: [['position', 'ASC'], ['created_at', 'ASC']],
+      include: [
+        { model: DoctorProfile, as: 'doctor',  attributes: ['id', 'full_name', 'specialization'], required: false },
+        {
+          model: User, as: 'patient', attributes: ['id', 'mobile'], required: false,
+          include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name'], required: false }],
+        },
+      ],
+    });
+
+    const result = entries.map((e) => {
+      const doc     = e.get('doctor')  as DoctorProfile | null;
+      const patient = e.get('patient') as (User & { patientProfile?: PatientProfile }) | null;
+      const profile = patient?.get('patientProfile') as PatientProfile | null;
+      return {
+        id:               e.id,
+        position:         e.position,
+        status:           e.status,
+        date:             e.date,
+        offered_at:       e.offered_at,
+        expires_at:       e.expires_at,
+        created_at:       e.created_at,
+        doctor:    doc    ? { id: doc.id,         full_name: doc.full_name, specialization: doc.specialization } : null,
+        patient:   patient ? { id: patient.id,     mobile: patient.mobile, full_name: profile?.full_name ?? null } : null,
+      };
+    });
+
+    sendSuccess(res, result, 200, { total: result.length, page: 1, per_page: result.length, total_pages: 1 });
+  }),
+);
+
+// Remove a waitlist entry (admin action)
+router.delete('/waitlist/:id',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  validate(UuidParamSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { WaitlistEntry, WaitlistStatus: WStatus } = await import('../../models');
+    const entry = await WaitlistEntry.findByPk(param(req, 'id'));
+    if (!entry) { sendError(res, 404, { code: 'NOT_FOUND', message: 'Waitlist entry not found.' }); return; }
+
+    const scopeId = scopedHospitalId(req);
+    if (scopeId && entry.hospital_id !== scopeId) {
+      sendError(res, 403, { code: 'FORBIDDEN', message: 'Access denied.' }); return;
+    }
+
+    if (entry.status === WStatus.OFFERED && entry.offered_slot_id) {
+      const { OpdSlotSession, OpdSlotStatus } = await import('../../models');
+      await OpdSlotSession.update({ status: OpdSlotStatus.PUBLISHED }, { where: { id: entry.offered_slot_id } });
+    }
+
+    await entry.update({ status: WStatus.CANCELLED });
+    sendSuccess(res, { message: 'Waitlist entry removed.' });
   }),
 );
 

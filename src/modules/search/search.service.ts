@@ -212,6 +212,7 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
           is_active:              doctor.is_active && !doctor.deleted_at,
           is_verified:            doctor.verification_status === VerificationStatus.APPROVED,
           hospital_is_live:       hospital.onboarding_status === OnboardingStatus.LIVE,
+          is_discoverable:        doctor.is_discoverable !== false,
           last_indexed_at:        new Date(),
         },
       });
@@ -230,6 +231,7 @@ export async function rebuildFullIndex(): Promise<{ updated: number; errors: num
           is_active:              doctor.is_active && !doctor.deleted_at,
           is_verified:            doctor.verification_status === VerificationStatus.APPROVED,
           hospital_is_live:       hospital.onboarding_status === OnboardingStatus.LIVE,
+          is_discoverable:        doctor.is_discoverable !== false,
           last_indexed_at:        new Date(),
         });
       }
@@ -284,7 +286,7 @@ export async function autocomplete(q: string, city?: string): Promise<ServiceRes
   if (cached) return ok(JSON.parse(cached));
 
   const where: Record<string, unknown> = {
-    is_active: true, is_verified: true, hospital_is_live: true,
+    is_active: true, is_verified: true, hospital_is_live: true, is_discoverable: true,
     doctor_name_normalized: { [Op.iLike]: `%${normalized}%` },
   };
   if (city) where.city = { [Op.iLike]: `%${city}%` };
@@ -304,7 +306,7 @@ export async function autocomplete(q: string, city?: string): Promise<ServiceRes
   // Add matching specialisations
   const specs = await DoctorSearchIndex.findAll({
     where: {
-      is_active: true, is_verified: true, hospital_is_live: true,
+      is_active: true, is_verified: true, hospital_is_live: true, is_discoverable: true,
       specialization: { [Op.iLike]: `%${normalized}%` },
       ...(city && { city: { [Op.iLike]: `%${city}%` } }),
     },
@@ -388,7 +390,7 @@ export async function searchDoctors(filters: SearchFilters): Promise<ServiceResp
 
   // Build WHERE clause
   const where: Record<string, unknown> = {
-    is_active: true, is_verified: true, hospital_is_live: true,
+    is_active: true, is_verified: true, hospital_is_live: true, is_discoverable: true,
   };
 
   if (filters.specialization) {

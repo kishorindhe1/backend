@@ -46,6 +46,7 @@ export class DoctorSearchIndex extends Model<
   declare is_active:           boolean;
   declare is_verified:         boolean;
   declare hospital_is_live:    boolean;
+  declare is_discoverable:     CreationOptional<boolean>;
   declare last_indexed_at:     CreationOptional<Date>;
   declare created_at:          CreationOptional<Date>;
   declare updated_at:          CreationOptional<Date>;
@@ -85,6 +86,7 @@ DoctorSearchIndex.init(
     is_active:        { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     is_verified:      { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     hospital_is_live: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+    is_discoverable:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     last_indexed_at:  { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
     created_at: DataTypes.DATE,
     updated_at: DataTypes.DATE,

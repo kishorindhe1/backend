@@ -70,7 +70,8 @@ export class DoctorProfile extends Model<
   declare waitlist_enabled:                 CreationOptional<boolean>;
   declare waitlist_offer_expiry_minutes:    CreationOptional<number>;
 
-  declare is_active:   CreationOptional<boolean>;
+  declare is_active:        CreationOptional<boolean>;
+  declare is_discoverable:  CreationOptional<boolean>;
   declare deleted_at:  Date | null;
   declare created_at:  CreationOptional<Date>;
   declare updated_at:  CreationOptional<Date>;
@@ -131,7 +132,8 @@ DoctorProfile.init(
     waitlist_enabled:              { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     waitlist_offer_expiry_minutes: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 30 },
 
-    is_active:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    is_active:        { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+    is_discoverable:  { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
     deleted_at: { type: DataTypes.DATE, allowNull: true },
     created_at: DataTypes.DATE,
     updated_at: DataTypes.DATE,

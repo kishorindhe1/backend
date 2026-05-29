@@ -518,19 +518,20 @@ export async function getPublishedSlots(
 // ── Today's live OPD dashboard ────────────────────────────────────────────────
 // Returns all doctors with published slots today + live queue state per doctor.
 export interface TodayDoctorSummary {
-  doctor_id:       string;
-  doctor_name:     string;
-  specialization:  string;
-  total_slots:     number;
-  booked_slots:    number;
-  empty_slots:     number;
-  walk_in_slots:   number;
-  completed_slots: number;
-  current_token:   number | null;
-  waiting_count:   number;
-  delay_minutes:   number;
-  doctor_status:   'available' | 'in_consultation' | 'delayed' | 'absent';
-  slots:           Array<{
+  doctor_id:        string;
+  doctor_name:      string;
+  specialization:   string;
+  total_slots:      number;
+  booked_slots:     number;
+  empty_slots:      number;
+  walk_in_slots:    number;
+  completed_slots:  number;
+  current_token:    number | null;
+  waiting_count:    number;
+  delay_minutes:    number;
+  doctor_status:    'available' | 'in_consultation' | 'delayed' | 'absent';
+  consultation_fee: number;
+  slots:            Array<{
     id: string; slot_start_time: string; slot_end_time: string;
     status: string; walk_in_token_id: string | null; appointment_id: string | null;
   }>;
@@ -567,7 +568,7 @@ export async function getTodayOPD(
   const doctorIds = [...byDoctor.keys()];
 
   // Fetch doctor profiles, queue state, delay events in parallel
-  const [doctors, queueEntries, delayEvents, walkInTokens] = await Promise.all([
+  const [doctors, queueEntries, delayEvents, walkInTokens, affiliations] = await Promise.all([
     DoctorProfile.findAll({ where: { id: { [Op.in]: doctorIds } }, attributes: ['id', 'full_name', 'specialization'] }),
     ConsultationQueue.findAll({
       where: { doctor_id: { [Op.in]: doctorIds }, hospital_id: hospitalId, queue_date: date },
@@ -581,10 +582,15 @@ export async function getTodayOPD(
       where: { doctor_id: { [Op.in]: doctorIds }, hospital_id: hospitalId, date },
       attributes: ['doctor_id', 'token_number', 'status'],
     }),
+    DoctorHospitalAffiliation.findAll({
+      where: { doctor_id: { [Op.in]: doctorIds }, hospital_id: hospitalId, is_active: true },
+      attributes: ['doctor_id', 'consultation_fee'],
+    }),
   ]);
 
-  const doctorMap  = new Map(doctors.map((d) => [d.id, d]));
-  const delayMap   = new Map(delayEvents.map((e) => [e.doctor_id, e]));
+  const doctorMap     = new Map(doctors.map((d) => [d.id, d]));
+  const delayMap      = new Map(delayEvents.map((e) => [e.doctor_id, e]));
+  const affiliationMap = new Map(affiliations.map((a) => [a.doctor_id, Number(a.consultation_fee)]));
 
   // Group queue entries by doctor
   const queueMap = new Map<string, typeof queueEntries>();
@@ -618,20 +624,24 @@ export async function getTodayOPD(
       appointment_id:   s.appointment_id,
     }));
 
+    const fee = affiliationMap.get(doctorId) ?? 0;
+    const bookedCount = slots.filter((s) => s.status === OpdSlotStatus.BOOKED && !s.walk_in_token_id).length;
+
     summaries.push({
-      doctor_id:       doctorId,
-      doctor_name:     (doc as any)?.full_name ?? doctorId.slice(0, 8),
-      specialization:  (doc as any)?.specialization ?? '',
-      total_slots:     slots.length,
-      booked_slots:    slots.filter((s) => s.status === OpdSlotStatus.BOOKED && !s.walk_in_token_id).length,
-      empty_slots:     slots.filter((s) => s.status === OpdSlotStatus.PUBLISHED).length,
-      walk_in_slots:   slots.filter((s) => s.walk_in_token_id !== null).length,
-      completed_slots: slots.filter((s) => s.status === OpdSlotStatus.COMPLETED).length,
-      current_token:   inConsult?.queue_position ?? null,
-      waiting_count:   waiting.length,
-      delay_minutes:   delay?.delay_minutes ?? 0,
-      doctor_status:   doctorStatus,
-      slots:           slotList,
+      doctor_id:        doctorId,
+      doctor_name:      (doc as any)?.full_name ?? doctorId.slice(0, 8),
+      specialization:   (doc as any)?.specialization ?? '',
+      total_slots:      slots.length,
+      booked_slots:     bookedCount,
+      empty_slots:      slots.filter((s) => s.status === OpdSlotStatus.PUBLISHED).length,
+      walk_in_slots:    slots.filter((s) => s.walk_in_token_id !== null).length,
+      completed_slots:  slots.filter((s) => s.status === OpdSlotStatus.COMPLETED).length,
+      current_token:    inConsult?.queue_position ?? null,
+      waiting_count:    waiting.length,
+      delay_minutes:    delay?.delay_minutes ?? 0,
+      doctor_status:    doctorStatus,
+      consultation_fee: fee,
+      slots:            slotList,
     });
   }
 

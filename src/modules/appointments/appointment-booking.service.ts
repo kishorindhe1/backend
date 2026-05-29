@@ -23,6 +23,7 @@ import { enqueueNotification }           from '../notifications/notification.ser
 import { NotificationChannel }           from '../../models';
 import { istDateTime }                   from '../../utils/dateTime';
 import { encryptField }                  from '../../utils/encryption';
+import { emit, OpdRooms, OpdEvents }    from '../../config/socket';
 
 export interface BookAppointmentInput {
   patient_id:        string;
@@ -127,6 +128,13 @@ async function bookQueueAppointment(input: BookAppointmentInput): Promise<Servic
     });
 
     await addToQueue(appointment.id, doctor_id, hospital_id, patient_id, scheduledAt);
+
+    emit(OpdRooms.hospital(hospital_id), OpdEvents.SLOT_BOOKED, {
+      doctor_id,
+      hospital_id,
+      date:   scheduledAt.toISOString().split('T')[0],
+      appointment_id: appointment.id,
+    });
 
     const doctor = await DoctorProfile.findByPk(doctor_id, { attributes: ['full_name'] });
     const pendingAhead   = Math.max(0, session.tokens_issued - session.current_token);
@@ -258,6 +266,14 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     const dateStr = result.scheduled_at.toISOString().split('T')[0];
     await redis.del(RedisKeys.publishedSlots(doctor_id, dateStr));
     await addToQueue(result.id, doctor_id, hospital_id, patient_id, result.scheduled_at);
+
+    emit(OpdRooms.hospital(hospital_id), OpdEvents.SLOT_BOOKED, {
+      slot_id:        slot_id,
+      doctor_id,
+      hospital_id,
+      date:           dateStr,
+      appointment_id: result.id,
+    });
 
     const doctor  = await DoctorProfile.findByPk(doctor_id, { attributes: ['full_name'] });
     const notifType = isAutoApproval ? 'booking_confirmed' : 'booking_awaiting_approval';

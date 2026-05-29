@@ -1,6 +1,7 @@
 import { Queue, Worker, Job } from 'bullmq';
 import { env }                from '../../config/env';
 import { logger }             from '../../utils/logger';
+import type { DoctorProfile, Hospital } from '../../models';
 
 const connection = { host: env.REDIS_HOST, port: env.REDIS_PORT, ...(env.REDIS_PASSWORD ? { password: env.REDIS_PASSWORD } : {}) };
 
@@ -18,7 +19,8 @@ type CronJobType =
   | 'expire_approval_timeouts'
   | 'expire_pending_payments'
   | 'auto_noshow_absent_patients'
-  | 'auto_expire_sessions';
+  | 'auto_expire_sessions'
+  | 'send_appointment_reminders';
 
 // ── Cron queue ────────────────────────────────────────────────────────────────
 export const cronQueue = new Queue<{ type: CronJobType }>('cron', {
@@ -70,6 +72,9 @@ export async function scheduleCronJobs(): Promise<void> {
   // Auto-expire sessions whose expected_end_time has passed — every 10 minutes
   await cronQueue.add('auto_expire_sessions', { type: 'auto_expire_sessions' }, { repeat: { pattern: '*/10 * * * *' } });
 
+  // Appointment reminders — 6:00 AM IST = 00:30 UTC — notify patients about tomorrow's appointments
+  await cronQueue.add('send_appointment_reminders', { type: 'send_appointment_reminders' }, { repeat: { pattern: '30 0 * * *' } });
+
   logger.info('⏰  Cron jobs scheduled');
 }
 
@@ -107,21 +112,15 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
     }
 
     case 'send_review_reminder': {
-      const { Hospital }    = await import('../../models');
-      const { OpdReviewLog } = await import('../../models');
+      const { OpdReviewLog, OpdSlotSession, OpdSlotStatus: SlotStatusEnum, HospitalStaff, NotificationChannel } = await import('../../models');
+      const { enqueueNotification } = await import('../notifications/notification.service');
+      const { Op } = await import('sequelize');
 
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       const date = tomorrow.toISOString().split('T')[0];
 
-      // Find hospitals that have draft slots but no review log yet
-      const { OpdSlotSession, OpdSlotStatus: SlotStatusEnum } = await import('../../models');
-      const { Op } = await import('sequelize');
-
-      const reviewed = await OpdReviewLog.findAll({
-        where: { date },
-        attributes: ['hospital_id'],
-      });
+      const reviewed = await OpdReviewLog.findAll({ where: { date }, attributes: ['hospital_id'] });
       const reviewedIds = new Set(reviewed.map((r) => r.hospital_id));
 
       const pending = await OpdSlotSession.findAll({
@@ -131,12 +130,26 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
       });
 
       const toRemind = pending.filter((p) => !reviewedIds.has(p.hospital_id));
-      logger.warn('Review reminder — hospitals with unreviewed draft slots', {
-        date,
-        count: toRemind.length,
-        hospitalIds: toRemind.map((p) => p.hospital_id),
+      if (toRemind.length === 0) break;
+
+      const hospitalIds = toRemind.map((p) => p.hospital_id);
+      const staffRows = await HospitalStaff.findAll({
+        where: { hospital_id: { [Op.in]: hospitalIds }, is_active: true },
+        attributes: ['user_id'],
       });
-      // TODO Phase 4: send actual SMS/notification to receptionist
+
+      let notified = 0;
+      for (const staff of staffRows) {
+        await enqueueNotification({
+          userId:   staff.user_id,
+          type:     'review_reminder',
+          channels: [NotificationChannel.PUSH],
+          priority: 'medium',
+          data: { date },
+        });
+        notified++;
+      }
+      logger.info('Review reminder sent', { date, hospitals: toRemind.length, notified });
       break;
     }
 
@@ -378,6 +391,63 @@ async function processJob(job: Job<{ type: CronJobType }>): Promise<void> {
       if (completed > 0 || cancelled > 0) {
         logger.info('Auto-expired sessions', { completed, cancelled });
       }
+      break;
+    }
+
+    // ── Send appointment reminders for tomorrow's appointments ──────────────
+    case 'send_appointment_reminders': {
+      const { Appointment, AppointmentStatus, DoctorProfile, Hospital, User, NotificationChannel } = await import('../../models');
+      const { enqueueNotification } = await import('../notifications/notification.service');
+      const { Op } = await import('sequelize');
+
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const startOfTomorrow = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), 0, 0, 0);
+      const endOfTomorrow   = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate(), 23, 59, 59);
+
+      const appointments = await Appointment.findAll({
+        where: {
+          status:      { [Op.in]: [AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING] },
+          scheduled_at: { [Op.between]: [startOfTomorrow, endOfTomorrow] },
+        },
+        include: [
+          { model: DoctorProfile, as: 'doctor',   attributes: ['full_name'] },
+          { model: Hospital,      as: 'hospital', attributes: ['name'] },
+        ],
+        attributes: ['id', 'patient_id', 'scheduled_at', 'consultation_fee'],
+      });
+
+      let sent = 0, skipped = 0;
+      for (const appt of appointments) {
+        try {
+          const doctor   = appt.get('doctor')   as DoctorProfile | null;
+          const hospital = appt.get('hospital') as Hospital | null;
+          const at = new Date(appt.scheduled_at);
+          const time = at.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+          const date = at.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+
+          await enqueueNotification({
+            userId:        appt.patient_id,
+            appointmentId: appt.id,
+            type:          'appointment_reminder',
+            channels:      [NotificationChannel.PUSH, NotificationChannel.SMS],
+            priority:      'medium',
+            data: {
+              doctor:   doctor?.full_name ?? 'Doctor',
+              hospital: hospital?.name ?? 'Hospital',
+              date,
+              time,
+              hours:    '24',
+              token:    '—',
+            },
+          });
+          sent++;
+        } catch (err) {
+          skipped++;
+          logger.error('Reminder enqueue error', { appointmentId: appt.id, err });
+        }
+      }
+      logger.info('Appointment reminders enqueued', { total: appointments.length, sent, skipped });
       break;
     }
 
