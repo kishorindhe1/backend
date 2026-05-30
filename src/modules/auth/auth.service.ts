@@ -49,6 +49,10 @@ export async function requestOtp(mobile: string, countryCode = '+91'): Promise<S
     expires_in:       env.OTP_EXPIRY_MINUTES * 60,
     resend_allowed_in:RedisTTL.OTP_COOLDOWN,
     masked_mobile:    maskMobile(mobile),
+    // dev_otp is only included in non-production environments when OTP_BYPASS_CODE is set.
+    // It lets the patient app read the OTP directly without real SMS during development/staging.
+    // Never present in production (NODE_ENV=production strips it).
+    ...(env.NODE_ENV !== 'production' && env.OTP_BYPASS_CODE ? { dev_otp: otp } : {}),
   });
 }
 
