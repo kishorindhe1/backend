@@ -13,6 +13,10 @@ const InitiateSchema = z.object({
   body: z.object({ appointment_id: z.string().uuid() }),
 });
 
+const ReceiptParamSchema = z.object({
+  params: z.object({ paymentId: z.string().uuid() }),
+});
+
 const VerifySchema = z.object({
   body: z.object({
     razorpay_order_id:   z.string(),
@@ -67,6 +71,19 @@ async function refundPayment(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function downloadReceipt(req: Request, res: Response): Promise<void> {
+  const user      = req.user as JwtAccessPayload;
+  const paymentId = req.params.paymentId;
+  const result    = await PaymentService.getPaymentReceipt(paymentId, user.sub);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  res.set({
+    'Content-Type':        'application/pdf',
+    'Content-Disposition': `attachment; filename="receipt-${paymentId.slice(0, 8)}.pdf"`,
+    'Cache-Control':       'no-store',
+  });
+  res.send(result.data);
+}
+
 async function paymentHistory(req: Request, res: Response): Promise<void> {
   const user     = req.user as JwtAccessPayload;
   const page     = Math.max(1, parseInt(String(req.query.page     ?? 1)));
@@ -79,7 +96,8 @@ async function paymentHistory(req: Request, res: Response): Promise<void> {
 // ── Router ────────────────────────────────────────────────────────────────────
 const router = Router();
 
-router.get ('/history',    authenticate, asyncHandler(paymentHistory));
+router.get ('/history',              authenticate, asyncHandler(paymentHistory));
+router.get ('/:paymentId/receipt',  authenticate, validate(ReceiptParamSchema), asyncHandler(downloadReceipt));
 router.post('/initiate',   authenticate, idempotency, validate(InitiateSchema), asyncHandler(initiatePayment));
 router.post('/verify',     authenticate, idempotency, validate(VerifySchema),   asyncHandler(verifyPayment));
 router.post('/refund',     authenticate, validate(z.object({ body: z.object({ appointment_id: z.string().uuid() }) })), asyncHandler(refundPayment));

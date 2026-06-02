@@ -319,6 +319,21 @@ export const templates: Record<string, TemplateSet> = {
     ),
   },
 
+  // ── Review prompt — sent after consultation is marked done ───────────────
+  review_prompt: {
+    subject: `How was your visit? – ${BRAND.name}`,
+    sms: `Hi, how was your visit with Dr. {{doctor}}? Rate your experience on Upcharify. -UPCHARIFY`,
+    html: (d) => layout(
+      'How was your visit?',
+      `Share your experience with Dr. ${d.doctor} on Upcharify.`,
+      `
+      ${h1('How was your visit?')}
+      ${p(`We hope your consultation with <strong>Dr. ${d.doctor}</strong> went well. Your feedback helps other patients make informed decisions.`)}
+      ${p('Tap the button below to rate your experience — it only takes a few seconds.')}
+    `,
+    ),
+  },
+
   // ── Refund initiated ──────────────────────────────────────────────────────
   refund_initiated: {
     subject: `Refund Initiated – ${BRAND.name}`,

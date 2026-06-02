@@ -443,6 +443,55 @@ async function processWebhookEvent(
   }
 }
 
+// ── Payment receipt (PDF) ─────────────────────────────────────────────────────
+export async function getPaymentReceipt(
+  paymentId: string,
+  patientId: string,
+): Promise<ServiceResponse<Buffer>> {
+  const { User, PatientProfile, Hospital } = await import('../../models');
+
+  const payment = await Payment.findByPk(paymentId);
+  if (!payment) return fail('PAYMENT_NOT_FOUND', 'Payment not found.', 404);
+  if (payment.status !== PaymentGatewayStatus.CAPTURED) {
+    return fail('PAYMENT_NOT_CAPTURED', 'Receipt is only available for completed payments.', 422);
+  }
+
+  const appt = await Appointment.findByPk(payment.appointment_id, {
+    attributes: ['patient_id', 'doctor_id', 'hospital_id', 'scheduled_at'],
+  });
+  if (!appt) return fail('BOOKING_NOT_FOUND', 'Appointment not found.', 404);
+  if (appt.patient_id !== patientId) return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.', 403);
+
+  const [doc, hospital, patientUser] = await Promise.all([
+    DoctorProfile.findByPk(appt.doctor_id, { attributes: ['full_name'] }),
+    Hospital.findByPk(appt.hospital_id,    { attributes: ['name'] }),
+    User.findByPk(appt.patient_id, {
+      include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name'] }],
+    }),
+  ]);
+
+  const capturedAt    = payment.captured_at ?? new Date();
+  const invoiceDate   = new Date(capturedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+  const apptDate      = new Date(appt.scheduled_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const invoiceNumber = `INV-${new Date(capturedAt).toISOString().slice(0, 10).replace(/-/g, '')}-${String(payment.appointment_id).slice(0, 8).toUpperCase()}`;
+
+  const { generateReceiptPdf } = await import('../../utils/receiptPdf');
+  const pdfBuffer = await generateReceiptPdf({
+    invoiceNumber,
+    invoiceDate,
+    patientName:     (patientUser as any)?.patientProfile?.full_name ?? 'Patient',
+    doctor:          doc?.full_name ?? 'Doctor',
+    hospital:        (hospital as any)?.name ?? '—',
+    appointmentDate: apptDate,
+    amount:          Number(payment.amount),
+    txnId:           payment.razorpay_payment_id ?? '—',
+    gstin:           env.COMPANY_GSTIN,
+    address:         env.COMPANY_ADDRESS,
+  });
+
+  return ok(pdfBuffer);
+}
+
 // ── Payment history for a patient ─────────────────────────────────────────────
 export async function getPaymentHistory(
   patientId: string,

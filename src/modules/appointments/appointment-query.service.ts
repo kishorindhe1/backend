@@ -1,6 +1,6 @@
 import {
   Appointment, AppointmentStatus,
-  DoctorProfile, Hospital, OpdSlotSession, OpdToken,
+  DoctorProfile, Hospital, OpdSlotSession, OpdToken, DoctorReview,
 }                                         from '../../models';
 import { ErrorFactory }                  from '../../utils/errors';
 import { ServiceResponse, ok }           from '../../types';
@@ -12,6 +12,7 @@ export async function getAppointment(appointmentId: string, requesterId: string)
       { model: Hospital,       as: 'hospital', attributes: ['id', 'name'] },
       { model: OpdSlotSession, as: 'slot',     attributes: ['slot_start_time', 'slot_end_time', 'date', 'duration_minutes'] },
       { model: OpdToken,       as: 'opdToken', attributes: ['token_number', 'personalized_duration_minutes'] },
+      { model: DoctorReview,   as: 'review',   attributes: ['id', 'rating'] },
     ],
   });
   if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');

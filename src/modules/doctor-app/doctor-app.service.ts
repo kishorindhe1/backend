@@ -14,6 +14,7 @@ import { invalidateQueueCache }            from '../queue/queue.service';
 import { enqueueNotification }             from '../notifications/notification.service';
 import { NotificationChannel }             from '../../models';
 import { istDate }                         from '../../utils/dateTime';
+import { emit, OpdRooms, OpdEvents }       from '../../config/socket';
 
 const JS_DAY_TO_ENUM: DayOfWeek[] = [
   DayOfWeek.SUNDAY, DayOfWeek.MONDAY, DayOfWeek.TUESDAY,
@@ -46,6 +47,32 @@ export async function markConsultationDone(
     : 0;
 
   await invalidateQueueCache(doctorId, entry.queue_date);
+
+  // Notify all other waiting patients in this session that queue moved
+  const waitingPatients = await ConsultationQueue.findAll({
+    where: { doctor_id: doctorId, queue_date: entry.queue_date, status: QueueStatus.WAITING },
+    attributes: ['patient_id'],
+  });
+  for (const p of waitingPatients) {
+    emit(OpdRooms.patient(p.patient_id), OpdEvents.QUEUE_UPDATED, { doctor_id: doctorId });
+  }
+
+  // Trigger review prompt push notification for the completed patient
+  const apptForReview = await Appointment.findByPk(appointmentId, {
+    attributes: ['patient_id', 'doctor_id'],
+    include: [{ model: (await import('../../models')).DoctorProfile, as: 'doctor', attributes: ['full_name'] }],
+  });
+  if (apptForReview) {
+    await enqueueNotification({
+      userId:        apptForReview.patient_id,
+      appointmentId: appointmentId,
+      type:          'review_prompt',
+      channels:      [NotificationChannel.PUSH],
+      priority:      'medium',
+      data:          { doctor: (apptForReview as any).doctor?.full_name ?? 'Doctor' },
+    }).catch(() => {});
+  }
+
   logger.info('Consultation marked done', { appointmentId, doctorId, durationMin });
   return ok({ duration_minutes: durationMin });
 }
