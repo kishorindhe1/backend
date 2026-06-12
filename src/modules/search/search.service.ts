@@ -370,6 +370,7 @@ export interface SearchResult {
   badges:   string[];
   distance_km?: number;
   ranking_score: number;
+  profile_photo_url?: string | null;   // attached post-ranking from DoctorProfile
 }
 
 export async function searchDoctors(filters: SearchFilters): Promise<ServiceResponse<{ results: SearchResult[]; total: number; query_interpretation: object }>> {

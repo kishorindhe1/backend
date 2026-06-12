@@ -329,10 +329,14 @@ describe('Search endpoints (no auth)', () => {
     }
   });
 
-  it('doctor search returns query_interpretation field', async () => {
+  it('doctor search symptom query returns the flattened wire shape', async () => {
+    // Wire contract: the route flattens the service's { results, total, query_interpretation }
+    // into data = results array + pagination meta; query_interpretation is service-internal
+    // and intentionally NOT exposed (see search.routes.ts searchDoctors handler).
     const res = await request(tempApp).get('/api/v1/search/doctors?q=knee+pain&city=Nashik');
     if (res.status === 200) {
-      expect(res.body.data).toHaveProperty('query_interpretation');
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.meta).toHaveProperty('total');
     } else {
       expect([200, 500]).toContain(res.status);
     }

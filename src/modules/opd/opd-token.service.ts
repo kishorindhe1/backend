@@ -275,6 +275,20 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
     emit(OpdRooms.patient(next.patient_id), OpdEvents.TOKEN_CALLED, tokenCalledPayload);
   }
 
+  // Fan out to every still-waiting patient's personal room — the patient app
+  // can't join the staff-only hospital room; it listens in its own room.
+  const stillWaiting = await OpdToken.findAll({
+    where: {
+      session_id: sessionId,
+      status:     { [Op.in]: [OpdTokenStatus.ARRIVED, OpdTokenStatus.WAITING] },
+      patient_id: { [Op.ne]: null },
+    },
+    attributes: ['patient_id'],
+  });
+  for (const t of stillWaiting) {
+    emit(OpdRooms.patient(t.patient_id!), OpdEvents.QUEUE_UPDATED, tokenCalledPayload);
+  }
+
   if (next.patient_id) {
     const [doctor, hospital] = await Promise.all([
       DoctorProfile.findByPk(session.doctor_id, { attributes: ['full_name'] }),

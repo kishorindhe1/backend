@@ -1,7 +1,8 @@
 import { PatientProfile } from '../../models';
 import { User }           from '../../models';
 import { HealthRecord, RecordType } from '../../models';
-import { issueTokenPair, storeRefreshToken } from '../auth/token.service';
+import { UserNotificationPreference } from '../../models';
+import { issueTokenPair, storeRefreshToken, invalidateRefreshToken } from '../auth/token.service';
 import { ProfileStatus, AccountStatus, ServiceResponse, ok, fail } from '../../types';
 import { getMissingFields, getCompletionPercentage } from '../../utils/helpers';
 import { CompleteProfileInput, UpdateProfileInput }  from './patient.validation';
@@ -130,4 +131,43 @@ export async function updateProfilePhotoUrl(userId: string, photoUrl: string): P
   if (!profile) return fail('PROFILE_NOT_FOUND', 'Profile not found.', 404);
   await profile.update({ profile_photo_url: photoUrl });
   return ok({ profile_photo_url: photoUrl });
+}
+
+// ── Account deletion (Play Store / GDPR requirement) ─────────────────────────
+// Soft-deletes the user and scrubs all PII. Appointment/payment rows are kept
+// (financial-record retention) but no longer link to any identifiable data.
+export async function deleteAccount(userId: string): Promise<ServiceResponse<{ message: string }>> {
+  const user = await User.findByPk(userId);
+  if (!user || user.deleted_at) return fail('PROFILE_NOT_FOUND', 'User not found.', 404);
+
+  // 1. Scrub profile PII
+  const profile = await PatientProfile.findOne({ where: { user_id: userId } });
+  if (profile) {
+    await profile.update({
+      full_name: null, email: null, date_of_birth: null, gender: null,
+      blood_group: null, profile_photo_url: null,
+      profile_status: ProfileStatus.INCOMPLETE, completed_at: null,
+    });
+  }
+
+  // 2. Remove uploaded health records and push token
+  await HealthRecord.destroy({ where: { patient_id: userId } });
+  await UserNotificationPreference.update({ fcm_token: null }, { where: { user_id: userId } });
+
+  // 3. Soft-delete the user. Mobile is replaced with a non-dialable placeholder
+  //    (can never match the OTP regex) so the real number is freed for a fresh
+  //    registration instead of resurrecting this account via findOrCreate.
+  const placeholder = `D${user.id.replace(/-/g, '').slice(0, 14)}`;
+  await user.update({
+    mobile: placeholder, email: null,
+    otp_secret: null, otp_expires_at: null,
+    account_status: AccountStatus.DEACTIVATED,
+    deleted_at: new Date(),
+  });
+
+  // 4. Revoke active sessions
+  await invalidateRefreshToken(userId);
+
+  logger.info('Patient account deleted', { userId });
+  return ok({ message: 'Your account has been deleted.' });
 }

@@ -75,8 +75,9 @@ export async function verifyOtp(mobile: string, otp: string, fcmToken?: string):
   if (!user.otp_secret || !user.otp_expires_at) return fail('AUTH_OTP_INVALID', 'No OTP found. Please request a new one.', 401);
   if (user.otp_expires_at < new Date()) { await user.update({ otp_secret: null, otp_expires_at: null }); return fail('AUTH_OTP_EXPIRED', 'OTP has expired.', 401); }
 
-  const isBypass = env.OTP_BYPASS_CODE && otp === env.OTP_BYPASS_CODE;
-  const isValid  = isBypass || await verifyOTP(otp, user.otp_secret);
+  const bypassAllowed = env.OTP_BYPASS_CODE && otp === env.OTP_BYPASS_CODE &&
+    (!env.OTP_BYPASS_MOBILE || mobile === env.OTP_BYPASS_MOBILE);
+  const isValid = bypassAllowed || await verifyOTP(otp, user.otp_secret);
   if (!isValid) {
     const newAttempts = user.otp_attempts + 1;
     await user.update({ otp_attempts: newAttempts });

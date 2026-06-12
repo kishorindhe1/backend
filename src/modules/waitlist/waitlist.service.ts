@@ -206,10 +206,16 @@ export async function getMyWaitlist(
     entries.map(async (e) => {
       const json: any = { ...e.toJSON(), offer_expires_at: e.expires_at };
       if (e.status === WaitlistStatus.OFFERED && e.offered_slot_id) {
+        // OpdSlotSession has no slot_datetime column — compose it from date + start time
         const slot = await OpdSlotSession.findByPk(e.offered_slot_id, {
-          attributes: ['slot_datetime', 'duration_minutes'],
+          attributes: ['date', 'slot_start_time', 'duration_minutes'],
         });
-        if (slot) json.offered_slot = slot.toJSON();
+        if (slot) {
+          json.offered_slot = {
+            slot_datetime:    `${slot.date}T${slot.slot_start_time}:00`,
+            duration_minutes: slot.duration_minutes,
+          };
+        }
       }
       return json;
     }),

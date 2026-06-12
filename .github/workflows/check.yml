@@ -1,0 +1,34 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      # Dummy values — integration tests skip without RUN_INTEGRATION;
+      # these only satisfy the env schema so modules can import config/env
+      DB_NAME: ci_dummy
+      DB_USER: ci_dummy
+      DB_PASSWORD: ci_dummy
+      JWT_ACCESS_SECRET: ci-dummy-access-secret-32-chars-min!
+      JWT_REFRESH_SECRET: ci-dummy-refresh-secret-32-chars-ok!
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Unit tests (integration suite skips without RUN_INTEGRATION)
+        run: npx jest --forceExit

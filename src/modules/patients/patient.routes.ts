@@ -62,6 +62,29 @@ router.put(
   asyncHandler(PatientController.updateProfile),
 );
 
+// PATCH alias — the mobile app sends PATCH for partial profile updates
+router.patch(
+  '/me',
+  requireCompleteProfile,
+  validate(UpdateProfileSchema),
+  asyncHandler(PatientController.updateProfile),
+);
+
+/**
+ * @route   DELETE /api/v1/patients/me
+ * @desc    Delete own account — scrubs PII, revokes sessions (Play Store requirement)
+ * @access  Private
+ */
+router.delete(
+  '/me',
+  asyncHandler(async (req: Request, res: Response) => {
+    const user   = req.user as JwtAccessPayload;
+    const result = await PatientService.deleteAccount(user.sub);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
 // ── Profile photo ─────────────────────────────────────────────────────────────
 router.patch(
   '/me/photo',

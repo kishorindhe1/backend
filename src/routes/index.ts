@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getMetrics, getContentType } from '../config/metrics';
+import { env } from '../config/env';
 import { DoctorProfile, Hospital, DoctorReview } from '../models';
 import { VerificationStatus } from '../models/doctor.model';
 import authRoutes          from '../modules/auth/auth.routes';
@@ -50,6 +51,19 @@ router.get('/stats', async (_req: Request, res: Response) => {
   } catch {
     res.json({ success: true, data: { total_doctors: 0, total_hospitals: 0, avg_rating: 0 } });
   }
+});
+
+// ── App config — force-update gate read by the mobile app on launch ──────────
+router.get('/app/config', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      min_version:       env.APP_MIN_VERSION,
+      latest_version:    env.APP_LATEST_VERSION,
+      store_url_ios:     env.APP_STORE_URL_IOS,
+      store_url_android: env.APP_STORE_URL_ANDROID,
+    },
+  });
 });
 
 // ── Prometheus metrics — internal only (restrict in nginx/load-balancer) ──────

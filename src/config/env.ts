@@ -37,7 +37,8 @@ const envSchema = z.object({
   OTP_MAX_ATTEMPTS:    z.string().default('5').transform(Number),
   OTP_COOLDOWN_SECONDS:z.string().default('60').transform(Number),
   OTP_LOCKOUT_MINUTES: z.string().default('30').transform(Number),
-  OTP_BYPASS_CODE:     z.string().optional(), // dev only — set to bypass SMS
+  OTP_BYPASS_CODE:     z.string().optional(),
+  OTP_BYPASS_MOBILE:   z.string().optional(), // restrict bypass to this number only (e.g. Play Store review account)
 
   // SMS
   MSG91_AUTH_KEY:    z.string().optional(),
@@ -86,6 +87,12 @@ const envSchema = z.object({
   // GST / Invoice
   COMPANY_GSTIN:         z.string().optional(),  // e.g. 27AABCU9603R1ZX
   COMPANY_ADDRESS:       z.string().optional(),  // shown on invoice footer
+
+  // App version gate — served by GET /app/config, read by the mobile app on launch
+  APP_MIN_VERSION:       z.string().default('1.0.0'),  // versions below this are force-updated
+  APP_LATEST_VERSION:    z.string().default('1.0.0'),
+  APP_STORE_URL_IOS:     z.string().default('https://apps.apple.com/app/upcharify'),
+  APP_STORE_URL_ANDROID: z.string().default('https://play.google.com/store/apps/details?id=com.upcharify.app'),
 
   // Teleconsult
   TELECONSULT_BASE_URL:  z.string().default('https://consult.upcharify.com'),
