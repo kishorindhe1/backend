@@ -405,6 +405,71 @@ export async function bookWalkIn(input: WalkInInput): Promise<ServiceResponse<ob
   return ok({ appointment_id: appointment.id, queue_position: position, patient_id: user.id, fee, message: `Walk-in registered. Token #${position}` });
 }
 
+// ── Book a specific slot for a patient at the desk (scheduled booking) ─────────
+export interface BookSlotInput {
+  doctor_id:       string;
+  hospital_id:     string;
+  patient_mobile:  string;
+  slot_id:         string;
+  payment_mode:    CollectionMode;   // cash | card | upi | insurance — collected at desk
+  receptionist_id: string;
+}
+
+// CollectionMode is finer-grained than the appointment-level PaymentMode enum.
+// Cash/card map directly; upi/insurance fall back to ONLINE_PREPAID for the
+// coarse appointment record (the precise mode is kept on the collection row).
+function toPaymentMode(mode: CollectionMode): PaymentMode {
+  if (mode === CollectionMode.CASH) return PaymentMode.CASH;
+  if (mode === CollectionMode.CARD) return PaymentMode.CARD;
+  return PaymentMode.ONLINE_PREPAID;
+}
+
+export async function bookSlotForPatient(input: BookSlotInput): Promise<ServiceResponse<object>> {
+  const { doctor_id, hospital_id, patient_mobile, slot_id, payment_mode, receptionist_id } = input;
+
+  // Find or create patient (same pattern as walk-ins)
+  const [user] = await User.findOrCreate({
+    where:    { mobile: patient_mobile },
+    defaults: { mobile: patient_mobile, country_code: '+91', role: UserRole.PATIENT, account_status: AccountStatus.ACTIVE, otp_secret: null, otp_expires_at: null, otp_attempts: 0, last_login_at: null, deleted_at: null },
+  });
+
+  const { bookAppointment } = await import('../appointments/appointment-booking.service');
+  const booking = await bookAppointment({
+    patient_id:   user.id,
+    doctor_id,
+    hospital_id,
+    slot_id,
+    payment_mode: toPaymentMode(payment_mode),
+    admin_booking: true,
+  });
+
+  if (!booking.success) return booking;
+  const data = booking.data as { appointment_id: string; scheduled_at: Date; consultation_fee: number };
+  const fee  = Number(data.consultation_fee);
+
+  // Record the collected payment so it appears in Collections.
+  await HospitalCollection.create({
+    hospital_id,
+    patient_id:     user.id,
+    appointment_id: data.appointment_id,
+    opd_token_id:   null,
+    amount:         fee,
+    mode:           payment_mode,
+    collected_by:   receptionist_id,
+    notes:          'Scheduled booking — collected at desk',
+  });
+
+  logger.info('Slot booked at desk', { appointmentId: data.appointment_id, mobile: patient_mobile, slot_id, mode: payment_mode });
+  return ok({
+    appointment_id: data.appointment_id,
+    patient_id:     user.id,
+    scheduled_at:   data.scheduled_at,
+    fee,
+    payment_mode,
+    message:        `Appointment booked. ₹${fee} collected via ${payment_mode}.`,
+  });
+}
+
 // ── Issue governance walk-in token (linked to OpdSlotSession) ─────────────────
 export interface WalkInTokenInput {
   doctor_id:    string;

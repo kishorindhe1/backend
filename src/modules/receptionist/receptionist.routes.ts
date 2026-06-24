@@ -35,6 +35,16 @@ const WalkInSchema = z.object({
   }),
 });
 
+const BookSlotSchema = z.object({
+  body: z.object({
+    doctor_id:      z.string().uuid(),
+    hospital_id:    z.string().uuid(),
+    patient_mobile: z.string().regex(/^[6-9]\d{9}$/),
+    slot_id:        z.string().uuid(),
+    payment_mode:   z.nativeEnum(CollectionMode),
+  }),
+});
+
 const QuickRegisterSchema = z.object({
   body: z.object({
     mobile:     z.string().regex(/^[6-9]\d{9}$/),
@@ -143,6 +153,14 @@ async function bookWalkIn(req: Request, res: Response): Promise<void> {
   sendCreated(res, result.data);
 }
 
+async function bookSlot(req: Request, res: Response): Promise<void> {
+  const user   = req.user as JwtAccessPayload;
+  const body   = req.body as { doctor_id: string; hospital_id: string; patient_mobile: string; slot_id: string; payment_mode: CollectionMode };
+  const result = await ReceptionistService.bookSlotForPatient({ ...body, receptionist_id: user.sub });
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendCreated(res, result.data);
+}
+
 async function lookupPatient(req: Request, res: Response): Promise<void> {
   const { q, hospital_id } = req.query as { q?: string; hospital_id?: string };
   if (!q || !hospital_id) { sendError(res, 400, { code: 'MISSING_PARAMS', message: 'q and hospital_id are required.' }); return; }
@@ -205,6 +223,9 @@ router.post  ('/doctors/:doctorId/:hospitalId/absent',     validate(AbsentSchema
 
 // Walk-in booking
 router.post('/walk-in', validate(WalkInSchema), asyncHandler(bookWalkIn));
+
+// Scheduled slot booking (desk) — picks a specific slot + collects payment
+router.post('/book-slot', validate(BookSlotSchema), asyncHandler(bookSlot));
 
 // Patient Lookup
 router.get ('/patients/lookup',                                              asyncHandler(lookupPatient));

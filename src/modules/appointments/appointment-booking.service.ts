@@ -34,6 +34,9 @@ export interface BookAppointmentInput {
   notes?:            string;
   appointment_type?: AppointmentType;
   payment_mode?:     PaymentMode;
+  // Desk/admin booking: skips patient-facing lead/cutoff/approval rules,
+  // force-confirms the appointment and marks payment as collected.
+  admin_booking?:    boolean;
 }
 
 function calcFee(amount: number) {
@@ -186,7 +189,8 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     const isAutoApproval = hospital.appointment_approval === AppointmentApprovalMode.AUTO;
 
     const pref = await DoctorBookingPreference.findOne({ where: { doctor_id, hospital_id } });
-    if (pref) {
+    // Desk bookings by an admin/receptionist bypass patient-facing lead/cutoff rules.
+    if (pref && !input.admin_booking) {
       const prefSlot = await OpdSlotSession.findByPk(slot_id, { attributes: ['date', 'slot_start_time'] });
       if (prefSlot) {
         const now      = new Date();
@@ -202,6 +206,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
     if (hospital.payment_collection_mode === PaymentCollectionMode.CASH_ONLY) resolvedPaymentMode = PaymentMode.CASH;
     else if (hospital.payment_collection_mode === PaymentCollectionMode.PATIENT_CHOICE && input.payment_mode) resolvedPaymentMode = input.payment_mode;
     else resolvedPaymentMode = PaymentMode.ONLINE_PREPAID;
+    if (input.admin_booking && input.payment_mode) resolvedPaymentMode = input.payment_mode;
 
     const result = await sequelize.transaction(async (t) => {
       const slot = await OpdSlotSession.findOne({ where: { id: slot_id, doctor_id, hospital_id }, lock: t.LOCK.UPDATE, transaction: t });
@@ -219,7 +224,9 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       const doctorRequiresApproval = pref?.requires_booking_approval === true;
       const isCashOrCard = resolvedPaymentMode === PaymentMode.CASH || resolvedPaymentMode === PaymentMode.CARD;
       let initialStatus: AppointmentStatus;
-      if (!isAutoApproval || doctorRequiresApproval) initialStatus = AppointmentStatus.AWAITING_HOSPITAL_APPROVAL;
+      // Desk bookings are confirmed immediately and payment is collected at the counter.
+      if (input.admin_booking)                       initialStatus = AppointmentStatus.CONFIRMED;
+      else if (!isAutoApproval || doctorRequiresApproval) initialStatus = AppointmentStatus.AWAITING_HOSPITAL_APPROVAL;
       else if (isCashOrCard)                         initialStatus = AppointmentStatus.CONFIRMED;
       else                                           initialStatus = AppointmentStatus.PENDING;
 
@@ -241,7 +248,7 @@ export async function bookAppointment(input: BookAppointmentInput): Promise<Serv
       const appointment = await Appointment.create({
         patient_id, doctor_id, hospital_id, slot_id,
         scheduled_at: slotDateTime, status: initialStatus,
-        payment_status: PaymentStatus.PENDING,
+        payment_status: input.admin_booking ? PaymentStatus.CAPTURED : PaymentStatus.PENDING,
         appointment_type: input.appointment_type ?? AppointmentType.ONLINE_BOOKING,
         payment_mode: resolvedPaymentMode,
         consultation_fee: fee, platform_fee: splits.platform_fee, doctor_payout: splits.doctor_payout,
