@@ -5,6 +5,7 @@ export {
   pauseSession,
   resumeSession,
   cancelSession,
+  endSession,
   listSessions,
   getSessionHistory,
   generateSessionsFromSchedule,

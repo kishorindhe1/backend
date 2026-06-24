@@ -313,6 +313,23 @@ export async function addReceptionist(
   });
 }
 
+// ── Deactivate staff member ───────────────────────────────────────────────────
+export async function deactivateStaff(
+  hospitalId:  string,
+  staffId:     string,
+  requesterId: string,
+): Promise<ServiceResponse<object>> {
+  const staff = await HospitalStaff.findOne({ where: { id: staffId, hospital_id: hospitalId } });
+  if (!staff) return fail('STAFF_NOT_FOUND', 'Staff member not found in this hospital.', 404);
+  if (staff.user_id === requesterId) return fail('CANNOT_REMOVE_SELF', 'You cannot deactivate your own account.', 422);
+  if (!staff.is_active) return fail('STAFF_ALREADY_INACTIVE', 'Staff member is already inactive.', 409);
+
+  await staff.update({ is_active: false });
+  logger.info('Hospital staff deactivated', { hospitalId, staffId, requesterId });
+
+  return ok({ staff_id: staffId, is_active: false, message: 'Staff member deactivated.' });
+}
+
 // ── Update payment collection mode ────────────────────────────────────────────
 export async function updatePaymentCollectionMode(
   hospitalId: string,

@@ -364,6 +364,28 @@ export async function getHospitalDetail(hospitalId: string): Promise<ServiceResp
   return ok({ ...hospital.toJSON(), stats: { active_doctors: doctorCount, active_staff: staffCount, total_appointments: appointmentCount } });
 }
 
+// ── Update own hospital (hospital_admin) — contact/address fields only ───────
+export async function updateMyHospital(
+  hospitalId: string,
+  changes: Partial<{
+    name:            string;
+    phone_primary:   string | null;
+    phone_secondary: string | null;
+    email_general:   string | null;
+    website:         string | null;
+    address_line1:   string | null;
+    address_line2:   string | null;
+    city:            string;
+    state:           string;
+    pincode:         string | null;
+  }>,
+): Promise<ServiceResponse<object>> {
+  const hospital = await Hospital.findByPk(hospitalId);
+  if (!hospital) throw ErrorFactory.notFound('HOSPITAL_NOT_FOUND', 'Hospital not found.');
+  await hospital.update(changes);
+  return ok(hospital.toJSON());
+}
+
 // ── Update hospital status (suspend / activate) ───────────────────────────────
 export async function updateHospitalStatus(
   hospitalId: string,
@@ -631,6 +653,59 @@ export async function getScopedFinancialSummary(
     refund_count:      refundCount,
     generated_at:      new Date(),
   });
+}
+
+// ── Scoped revenue time-series (hospital_admin chart) ────────────────────────
+// Payments carry no hospital_id, so the scoped series is built from captured
+// appointments — same source as getScopedFinancialSummary for consistency.
+export async function getScopedRevenueTimeSeries(
+  period:     'today' | 'week' | 'month',
+  hospitalId: string,
+): Promise<ServiceResponse<object[]>> {
+  const now = new Date();
+  let periodStart: Date;
+  let groupExpr: string;
+  let labelFormat: string;
+
+  if (period === 'today') {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    groupExpr   = "date_trunc('hour', scheduled_at)";
+    labelFormat = 'HH24":00"';
+  } else if (period === 'week') {
+    periodStart = new Date(now.getTime() - 7 * 24 * 60 * 60_000);
+    groupExpr   = "date_trunc('day', scheduled_at)";
+    labelFormat = 'Dy';
+  } else {
+    periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    groupExpr   = "date_trunc('day', scheduled_at)";
+    labelFormat = 'DD Mon';
+  }
+
+  const rows = await sequelizeRead.query<{
+    label: string; gmv: string; revenue: string; transactions: string;
+  }>(
+    `SELECT
+       to_char(${groupExpr}, :labelFormat) AS label,
+       COALESCE(SUM(consultation_fee::numeric), 0) AS gmv,
+       COALESCE(SUM(platform_fee::numeric),     0) AS revenue,
+       COUNT(*)                                    AS transactions
+     FROM appointments
+     WHERE payment_status = 'captured'
+       AND hospital_id = :hospitalId
+       AND scheduled_at >= :periodStart
+     GROUP BY ${groupExpr}
+     ORDER BY ${groupExpr}`,
+    { replacements: { periodStart, labelFormat, hospitalId }, type: QueryTypes.SELECT },
+  );
+
+  return ok(
+    rows.map(r => ({
+      label:        r.label.trim(),
+      gmv:          parseFloat(r.gmv),
+      revenue:      parseFloat(r.revenue),
+      transactions: parseInt(r.transactions, 10),
+    })),
+  );
 }
 
 // ── Scoped doctor list ────────────────────────────────────────────────────────

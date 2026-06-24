@@ -86,13 +86,16 @@ router.get('/financial',
   }),
 );
 
-// Revenue time-series for chart
+// Revenue time-series for chart — scoped to own hospital for HOSPITAL_ADMIN
 router.get('/financial/chart',
   requirePermission(Permission.FINANCIALS_READ),
   validate(PeriodSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const period = qs(req, 'period', 'week') as 'today' | 'week' | 'month';
-    const result = await AdminService.getRevenueTimeSeries(period);
+    const period  = qs(req, 'period', 'week') as 'today' | 'week' | 'month';
+    const scopeId = scopedHospitalId(req);
+    const result  = scopeId
+      ? await AdminService.getScopedRevenueTimeSeries(period, scopeId)
+      : await AdminService.getRevenueTimeSeries(period);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
   }),
@@ -241,6 +244,32 @@ router.get('/my-hospital',
     const user = req.user as JwtAccessPayload;
     if (!user.hospital_id) { sendError(res, 400, { code: 'NO_HOSPITAL', message: 'No hospital associated with your account.' }); return; }
     const result = await AdminService.getHospitalDetail(user.hospital_id);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+// Hospital admin — update their own hospital's contact & address details
+router.patch('/my-hospital',
+  requireRole(UserRole.HOSPITAL_ADMIN),
+  validate(z.object({
+    body: z.object({
+      name:            z.string().trim().min(2).max(200).optional(),
+      phone_primary:   z.string().trim().max(20).nullable().optional(),
+      phone_secondary: z.string().trim().max(20).nullable().optional(),
+      email_general:   z.string().email().nullable().optional(),
+      website:         z.string().trim().max(255).nullable().optional(),
+      address_line1:   z.string().trim().max(255).nullable().optional(),
+      address_line2:   z.string().trim().max(255).nullable().optional(),
+      city:            z.string().trim().min(2).max(100).optional(),
+      state:           z.string().trim().min(2).max(100).optional(),
+      pincode:         z.string().trim().max(10).nullable().optional(),
+    }),
+  })),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+    if (!user.hospital_id) { sendError(res, 400, { code: 'NO_HOSPITAL', message: 'No hospital associated with your account.' }); return; }
+    const result = await AdminService.updateMyHospital(user.hospital_id, req.body);
     if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
     sendSuccess(res, result.data);
   }),

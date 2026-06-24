@@ -86,6 +86,12 @@ async function updateOnboardingStatus(req: Request, res: Response): Promise<void
 }
 
 async function addReceptionist(req: Request, res: Response): Promise<void> {
+  const user = req.user as JwtAccessPayload;
+  // hospital_admin may only add staff to their own hospital
+  if (user.role === UserRole.HOSPITAL_ADMIN && user.hospital_id !== param(req, 'id')) {
+    sendError(res, 403, { code: 'AUTH_INSUFFICIENT_PERMISSIONS', message: 'You can only manage staff of your own hospital.' });
+    return;
+  }
   const { mobile, department } = req.body as { mobile: string; department?: string };
   const result = await HospitalService.addReceptionist(param(req, 'id'), mobile, department);
   if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
@@ -156,6 +162,26 @@ router.post('/:id/receptionists',
   authenticate, requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
   validate(AddReceptionistSchema),
   asyncHandler(addReceptionist),
+);
+
+// Deactivate a staff member — hospital_admin may only manage their own hospital
+const StaffIdSchema = z.object({
+  params: z.object({ id: z.string().uuid(), staffId: z.string().uuid() }),
+});
+
+router.delete('/:id/staff/:staffId',
+  authenticate, requireRole(UserRole.HOSPITAL_ADMIN, UserRole.SUPER_ADMIN),
+  validate(StaffIdSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const user = req.user as JwtAccessPayload;
+    if (user.role === UserRole.HOSPITAL_ADMIN && user.hospital_id !== param(req, 'id')) {
+      sendError(res, 403, { code: 'AUTH_INSUFFICIENT_PERMISSIONS', message: 'You can only manage staff of your own hospital.' });
+      return;
+    }
+    const result = await HospitalService.deactivateStaff(param(req, 'id'), param(req, 'staffId'), user.sub);
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
 );
 
 router.patch('/:id/logo',

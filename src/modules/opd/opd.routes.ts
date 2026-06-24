@@ -84,6 +84,12 @@ async function cancelSession(req: Request, res: Response): Promise<void> {
   sendSuccess(res, result.data);
 }
 
+async function endSession(req: Request, res: Response): Promise<void> {
+  const result = await OpdService.endSession(param(req, 'sessionId'));
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function activateSession(req: Request, res: Response): Promise<void> {
   const user   = req.user as JwtAccessPayload;
   const result = await OpdService.activateSession(param(req, 'sessionId'), user.sub);
@@ -248,6 +254,7 @@ router.patch('/:sessionId/activate',     authenticate, requireRole(...STAFF), va
 router.patch('/:sessionId/pause',        authenticate, requireRole(...STAFF), validate(PauseSessionSchema),  asyncHandler(pauseSession));
 router.patch('/:sessionId/resume',       authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(resumeSession));
 router.patch('/:sessionId/cancel',       authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(cancelSession));
+router.patch('/:sessionId/end',          authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(endSession));
 router.post ('/:sessionId/call-next',    authenticate, requireRole(...STAFF), validate(SessionIdSchema),     asyncHandler(callNext));
 router.post ('/:sessionId/walkin-token', authenticate, requireRole(...STAFF), validate(WalkInTokenSchema),   asyncHandler(issueWalkInToken));
 

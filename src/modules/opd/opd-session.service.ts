@@ -2,6 +2,7 @@ import { Op } from 'sequelize';
 import {
   OpdSession, OpdSessionStatus, OpdBookingMode,
   OpdSessionBreak,
+  OpdToken, OpdTokenStatus,
   DoctorProfile, Hospital,
   Schedule, OpdBookingModeConfig,
 } from '../../models';
@@ -170,6 +171,48 @@ export async function cancelSession(sessionId: string): Promise<ServiceResponse<
   await session.update({ status: OpdSessionStatus.CANCELLED });
   logger.info('OPD session cancelled', { sessionId });
   return ok({ session_id: sessionId, status: OpdSessionStatus.CANCELLED });
+}
+
+// ── End session ───────────────────────────────────────────────────────────────
+// Explicitly finish an active/paused session: completes any in-progress token,
+// marks outstanding tokens no-show, and stamps the actual end time.
+
+export async function endSession(sessionId: string): Promise<ServiceResponse<object>> {
+  const session = await OpdSession.findByPk(sessionId);
+  if (!session) throw ErrorFactory.notFound('SESSION_NOT_FOUND', 'Session not found.');
+  if (session.status !== OpdSessionStatus.ACTIVE && session.status !== OpdSessionStatus.PAUSED) {
+    throw ErrorFactory.unprocessable('INVALID_STATUS', `Only an active or paused session can be ended (current: ${session.status}).`);
+  }
+
+  const now = new Date();
+
+  // Close out the patient currently being seen
+  const [completedInProgress] = await OpdToken.update(
+    { status: OpdTokenStatus.COMPLETED, consultation_end: now },
+    { where: { session_id: sessionId, status: OpdTokenStatus.IN_PROGRESS } },
+  );
+
+  // Everyone still in the queue is a no-show for this session
+  const [noShowCount] = await OpdToken.update(
+    { status: OpdTokenStatus.NO_SHOW },
+    { where: { session_id: sessionId, status: { [Op.in]: [
+      OpdTokenStatus.ISSUED, OpdTokenStatus.ARRIVED, OpdTokenStatus.WAITING, OpdTokenStatus.CALLED,
+    ] } } },
+  );
+
+  await session.update({ status: OpdSessionStatus.COMPLETED, actual_end_time: istTime() });
+
+  emit(OpdRooms.session(sessionId), OpdEvents.SESSION_ENDED, {
+    session_id: sessionId, status: OpdSessionStatus.COMPLETED,
+  });
+
+  logger.info('OPD session ended', { sessionId, completedInProgress, noShowCount });
+  return ok({
+    session_id:        sessionId,
+    status:            OpdSessionStatus.COMPLETED,
+    completed_tokens:  completedInProgress,
+    no_show_tokens:    noShowCount,
+  });
 }
 
 // ── List sessions ─────────────────────────────────────────────────────────────
