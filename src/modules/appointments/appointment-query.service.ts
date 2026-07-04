@@ -1,9 +1,11 @@
 import {
   Appointment, AppointmentStatus,
   DoctorProfile, Hospital, OpdSlotSession, OpdToken, DoctorReview,
+  Payment, PaymentGatewayStatus,
 }                                         from '../../models';
 import { ErrorFactory }                  from '../../utils/errors';
 import { ServiceResponse, ok }           from '../../types';
+import { calculatePaymentCharges }       from '../payments/payment.service';
 
 export async function getAppointment(appointmentId: string, requesterId: string): Promise<ServiceResponse<object>> {
   const appointment = await Appointment.findByPk(appointmentId, {
@@ -13,11 +15,21 @@ export async function getAppointment(appointmentId: string, requesterId: string)
       { model: OpdSlotSession, as: 'slot',     attributes: ['slot_start_time', 'slot_end_time', 'date', 'duration_minutes'] },
       { model: OpdToken,       as: 'opdToken', attributes: ['token_number', 'personalized_duration_minutes'] },
       { model: DoctorReview,   as: 'review',   attributes: ['id', 'rating'] },
+      {
+        model: Payment,
+        as: 'payment',
+        attributes: ['id', 'amount', 'status', 'captured_at'],
+        required: false,
+        where: { status: PaymentGatewayStatus.CAPTURED },
+      },
     ],
   });
   if (!appointment) throw ErrorFactory.notFound('BOOKING_NOT_FOUND', 'Appointment not found.');
   if (appointment.patient_id !== requesterId) throw ErrorFactory.forbidden('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.');
-  return ok(appointment);
+  return ok({
+    ...appointment.toJSON(),
+    charges: calculatePaymentCharges(Number(appointment.consultation_fee)),
+  });
 }
 
 export async function getPatientAppointments(

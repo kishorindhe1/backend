@@ -18,6 +18,7 @@ import { emit, OpdRooms, OpdEvents }    from '../../config/socket';
 import { enqueueNotification }          from '../notifications/notification.service';
 import { getEffectiveDuration }         from '../duration/duration.service';
 import { PENDING_STATUSES, calculateEstimatedWait, updateSessionAvg } from './opd-helpers';
+import { sendReceiptEmailForAppointment } from '../payments/payment.service';
 
 // ── Issue online token ────────────────────────────────────────────────────────
 
@@ -235,6 +236,11 @@ export async function callNextToken(sessionId: string): Promise<ServiceResponse<
     const now          = new Date();
     const consultStart = completing.consultation_start ?? completing.called_at ?? now;
     await completing.update({ status: OpdTokenStatus.COMPLETED, consultation_end: now });
+    if (completing.appointment_id) {
+      await Appointment.update({ status: AppointmentStatus.COMPLETED }, { where: { id: completing.appointment_id } });
+      sendReceiptEmailForAppointment(completing.appointment_id)
+        .catch((err) => logger.warn('Receipt email after token completion failed', { appointmentId: completing.appointment_id, err }));
+    }
     await updateSessionAvg(session, { ...completing.toJSON(), consultation_start: consultStart, consultation_end: now } as any);
   }
 
@@ -343,7 +349,24 @@ export async function markTokenComplete(
     consultation_start: token.consultation_start ?? consultStart,
     consultation_end:   now,
   });
+  if (token.appointment_id) {
+    await Appointment.update({ status: AppointmentStatus.COMPLETED }, { where: { id: token.appointment_id } });
+    sendReceiptEmailForAppointment(token.appointment_id)
+      .catch((err) => logger.warn('Receipt email after manual token completion failed', { appointmentId: token.appointment_id, err }));
+  }
   await updateSessionAvg(session, { ...token.toJSON(), consultation_start: consultStart, consultation_end: now } as any);
+
+  const remaining = await OpdToken.count({
+    where: {
+      session_id: sessionId,
+      status: { [Op.notIn]: [OpdTokenStatus.COMPLETED, OpdTokenStatus.CANCELLED, OpdTokenStatus.NO_SHOW, OpdTokenStatus.SKIPPED] },
+    },
+  });
+  if (remaining === 0) {
+    const { istTime } = await import('../../utils/dateTime');
+    await session.update({ status: OpdSessionStatus.COMPLETED, actual_end_time: istTime() });
+    emit(OpdRooms.hospital(session.hospital_id), OpdEvents.SESSION_ENDED, { session_id: sessionId });
+  }
 
   logger.info('Token manually marked complete', { sessionId, tokenId });
   return ok({ token_id: tokenId, status: OpdTokenStatus.COMPLETED });

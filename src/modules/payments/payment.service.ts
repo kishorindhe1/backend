@@ -10,25 +10,162 @@ import { incrementCounter } from '../admin/admin.service';
 import { enqueueNotification } from '../notifications/notification.service';
 import { NotificationChannel } from '../../models';
 import { logger }          from '../../utils/logger';
-import { sendEmail }       from '../../utils/smsProvider';
+import { sendEmailWithAttachment } from '../../utils/smsProvider';
 import { buildGstInvoiceHtml, gstInvoiceSubject } from '../../utils/notificationTemplates';
 
 function getRazorpay() {
   return new Razorpay({ key_id: env.RAZORPAY_KEY_ID!, key_secret: env.RAZORPAY_KEY_SECRET! });
 }
 
-// ── Fee split helper (same rule as appointment service) ───────────────────────
-function calculateFeeSplit(amount: number) {
-  const platform_fee  = Math.round(amount * (env.PLATFORM_FEE_PERCENTAGE / 100) * 100) / 100;
-  const doctor_payout = amount - platform_fee;
-  return { platform_fee, doctor_payout };
+export type PaymentChargeBreakdown = {
+  consultation_fee: number;
+  platform_fee: number;
+  payment_gateway_fee: number;
+  gst_on_gateway_fee: number;
+  total_amount: number;
+};
+
+function roundMoney(amount: number) {
+  return Math.round(amount * 100) / 100;
+}
+
+export function calculatePaymentCharges(consultationFee: number): PaymentChargeBreakdown {
+  const consultation_fee = roundMoney(consultationFee);
+  const platform_fee = 0;
+  const payment_gateway_fee = roundMoney(consultation_fee * (env.PAYMENT_GATEWAY_FEE_PERCENTAGE / 100));
+  const gst_on_gateway_fee = roundMoney(payment_gateway_fee * (env.PAYMENT_GATEWAY_GST_PERCENTAGE / 100));
+  const total_amount = roundMoney(consultation_fee + platform_fee + payment_gateway_fee + gst_on_gateway_fee);
+
+  return {
+    consultation_fee,
+    platform_fee,
+    payment_gateway_fee,
+    gst_on_gateway_fee,
+    total_amount,
+  };
+}
+
+// ── Settlement split for online payments ─────────────────────────────────────
+function calculateFeeSplit(consultationFee: number) {
+  return {
+    platform_fee: 0,
+    doctor_payout: roundMoney(consultationFee),
+  };
+}
+
+async function buildReceiptEmailData(payment: Payment, razorpayPaymentId?: string) {
+  const { User, PatientProfile, Hospital } = await import('../../models');
+  const appt = await Appointment.findByPk(payment.appointment_id, {
+    attributes: ['patient_id', 'doctor_id', 'hospital_id', 'scheduled_at', 'consultation_fee'],
+  });
+  if (!appt) return null;
+
+  const [doc, hospital, patientUser] = await Promise.all([
+    DoctorProfile.findByPk(appt.doctor_id, { attributes: ['full_name'] }),
+    Hospital.findByPk(appt.hospital_id, { attributes: ['name'] }),
+    User.findByPk(appt.patient_id, {
+      include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name', 'email'] }],
+    }),
+  ]);
+
+  const patientProfile = (patientUser as any)?.patientProfile;
+  const patientEmail = patientProfile?.email as string | undefined;
+  if (!patientEmail) return null;
+
+  const capturedAt = payment.captured_at ?? new Date();
+  const invoiceDate = new Date(capturedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+  const appointmentDate = new Date(appt.scheduled_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const invoiceNumber = `INV-${new Date(capturedAt).toISOString().slice(0, 10).replace(/-/g, '')}-${String(payment.appointment_id).slice(0, 8).toUpperCase()}`;
+  const doctorName = doc?.full_name ?? 'Doctor';
+  const hospitalName = (hospital as any)?.name ?? '—';
+  const txnId = razorpayPaymentId ?? payment.razorpay_payment_id ?? '—';
+  const charges = calculatePaymentCharges(Number(appt.consultation_fee));
+
+  const html = buildGstInvoiceHtml({
+    invoiceNumber,
+    invoiceDate,
+    patientName: patientProfile?.full_name ?? 'Patient',
+    doctor: doctorName,
+    hospital: hospitalName,
+    appointmentDate,
+    amount: Number(payment.amount),
+    txnId,
+    gstin: env.COMPANY_GSTIN,
+    address: env.COMPANY_ADDRESS,
+    charges,
+  });
+
+  const plainText = `Tax Invoice ${invoiceNumber}\nDate: ${invoiceDate}\nBilled to: ${patientProfile?.full_name ?? 'Patient'}\nDoctor: Dr. ${doctorName}\nHospital: ${hospitalName}\nAppointment: ${appointmentDate}\nConsultation Fee: Rs.${charges.consultation_fee.toFixed(2)}\nPlatform Fee: Rs.${charges.platform_fee.toFixed(2)}\nPayment Gateway Fee: Rs.${charges.payment_gateway_fee.toFixed(2)}\nGST on Gateway Fee: Rs.${charges.gst_on_gateway_fee.toFixed(2)}\nAmount Paid: Rs.${charges.total_amount.toFixed(2)}\nTransaction ID: ${txnId}`;
+
+  const { generateReceiptPdf } = await import('../../utils/receiptPdf');
+  const pdf = await generateReceiptPdf({
+    invoiceNumber,
+    invoiceDate,
+    patientName: patientProfile?.full_name ?? 'Patient',
+    doctor: doctorName,
+    hospital: hospitalName,
+    appointmentDate,
+    amount: Number(payment.amount),
+    txnId,
+    gstin: env.COMPANY_GSTIN,
+    address: env.COMPANY_ADDRESS,
+    charges,
+  });
+
+  return { patientEmail, invoiceNumber, plainText, html, pdf };
+}
+
+export async function sendReceiptEmailForAppointment(appointmentId: string): Promise<void> {
+  const payment = await Payment.findOne({
+    where: { appointment_id: appointmentId, status: PaymentGatewayStatus.CAPTURED },
+    order: [['captured_at', 'DESC'], ['created_at', 'DESC']],
+  });
+  if (!payment) {
+    logger.info('Receipt email skipped: no captured payment found', { appointmentId });
+    return;
+  }
+
+  const data = await buildReceiptEmailData(payment);
+  if (!data) {
+    logger.info('Receipt email skipped: patient email not available', { appointmentId });
+    return;
+  }
+
+  await sendEmailWithAttachment(data.patientEmail, gstInvoiceSubject(data.invoiceNumber), data.plainText, data.html, {
+    filename: `receipt-${String(payment.id).slice(0, 8)}.pdf`,
+    contentType: 'application/pdf',
+    content: data.pdf,
+  });
+  logger.info('Receipt email sent after consultation completion', { appointmentId, paymentId: payment.id });
+}
+
+export async function resendReceiptEmail(paymentId: string, patientId: string): Promise<ServiceResponse<{ message: string }>> {
+  const payment = await Payment.findByPk(paymentId);
+  if (!payment) return fail('PAYMENT_NOT_FOUND', 'Payment not found.', 404);
+  if (payment.status !== PaymentGatewayStatus.CAPTURED) {
+    return fail('PAYMENT_NOT_CAPTURED', 'Receipt is only available for completed payments.', 422);
+  }
+
+  const appt = await Appointment.findByPk(payment.appointment_id, { attributes: ['patient_id'] });
+  if (!appt) return fail('BOOKING_NOT_FOUND', 'Appointment not found.', 404);
+  if (appt.patient_id !== patientId) return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.', 403);
+
+  const data = await buildReceiptEmailData(payment);
+  if (!data) return fail('EMAIL_NOT_AVAILABLE', 'Add an email to your profile to receive the receipt.', 422);
+
+  await sendEmailWithAttachment(data.patientEmail, gstInvoiceSubject(data.invoiceNumber), data.plainText, data.html, {
+    filename: `receipt-${String(payment.id).slice(0, 8)}.pdf`,
+    contentType: 'application/pdf',
+    content: data.pdf,
+  });
+  return ok({ message: 'Receipt sent to your email.' });
 }
 
 // ── Initiate payment — create Razorpay order ──────────────────────────────────
 export async function initiatePayment(
   appointmentId: string,
   patientId:     string,
-): Promise<ServiceResponse<{ order_id: string; amount: number; currency: string; key_id: string }>> {
+): Promise<ServiceResponse<{ order_id: string; amount: number; currency: string; key_id: string; charges: PaymentChargeBreakdown }>> {
   const appointment = await Appointment.findByPk(appointmentId);
 
   if (!appointment) return fail('BOOKING_NOT_FOUND', 'Appointment not found.', 404);
@@ -37,11 +174,12 @@ export async function initiatePayment(
     return fail('PAYMENT_ALREADY_PROCESSED', 'Payment already initiated or completed.', 409);
   }
 
-  const amount = Number(appointment.consultation_fee);
+  const consultationFee = Number(appointment.consultation_fee);
+  const charges = calculatePaymentCharges(consultationFee);
 
   const razorpay = getRazorpay();
   const order = await razorpay.orders.create({
-    amount:   Math.round(amount * 100), // paise
+    amount:   Math.round(charges.total_amount * 100), // paise
     currency: 'INR',
     receipt:  appointmentId,
   });
@@ -51,12 +189,12 @@ export async function initiatePayment(
   await appointment.update({ razorpay_order_id: orderId });
 
   // Create pending payment record
-  const splits = calculateFeeSplit(amount);
+  const splits = calculateFeeSplit(consultationFee);
   await Payment.create({
     appointment_id:      appointmentId,
     razorpay_order_id:   orderId,
     razorpay_payment_id: null,
-    amount,
+    amount: charges.total_amount,
     platform_fee:  splits.platform_fee,
     doctor_payout: splits.doctor_payout,
     currency:      'INR',
@@ -66,13 +204,14 @@ export async function initiatePayment(
     refund_amount: null,
   });
 
-  logger.info('Payment initiated', { appointmentId, orderId, amount });
+  logger.info('Payment initiated', { appointmentId, orderId, amount: charges.total_amount, charges });
 
   return ok({
     order_id: orderId,
-    amount,
+    amount: charges.total_amount,
     currency: 'INR',
     key_id:   env.RAZORPAY_KEY_ID ?? 'rzp_test_placeholder',
+    charges,
   });
 }
 
@@ -100,7 +239,10 @@ export async function verifyPayment(input: {
   const payment = await Payment.findOne({ where: { razorpay_order_id } });
   if (!payment) return fail('PAYMENT_NOT_FOUND', 'Payment record not found.', 404);
 
-  const splits = calculateFeeSplit(Number(payment.amount));
+  const apptForSplit = await Appointment.findByPk(payment.appointment_id, {
+    attributes: ['consultation_fee'],
+  });
+  const splits = calculateFeeSplit(Number(apptForSplit?.consultation_fee ?? payment.amount));
 
   await sequelize.transaction(async (t) => {
     await payment.update(
@@ -159,30 +301,8 @@ export async function verifyPayment(input: {
       data: { amount: Number(payment.amount), doctor: doctorName },
     });
 
-    // GST invoice email (only if patient has an email on file)
-    if (patientEmail) {
-      const invoiceDate    = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
-      const appointmentDate = new Date(appt.scheduled_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-      const invoiceNumber  = `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(payment.appointment_id).slice(0, 8).toUpperCase()}`;
-
-      const html = buildGstInvoiceHtml({
-        invoiceNumber,
-        invoiceDate,
-        patientName,
-        doctor:          doctorName,
-        hospital:        hospitalName,
-        appointmentDate,
-        amount:          Number(payment.amount),
-        txnId:           razorpay_payment_id,
-        gstin:           env.COMPANY_GSTIN,
-        address:         env.COMPANY_ADDRESS,
-      });
-
-      const plainText = `Tax Invoice ${invoiceNumber}\nDate: ${invoiceDate}\nBilled to: ${patientName}\nDoctor: Dr. ${doctorName}\nHospital: ${hospitalName}\nAppointment: ${appointmentDate}\nAmount Paid: Rs.${Number(payment.amount).toFixed(2)}\nTransaction ID: ${razorpay_payment_id}\nGST: Exempt (SAC 9993 - Healthcare Services)`;
-
-      await sendEmail(patientEmail, gstInvoiceSubject(invoiceNumber), plainText, html)
-        .catch((err) => logger.warn('GST invoice email failed', { appointmentId: payment.appointment_id, err }));
-    }
+    void patientName;
+    void patientEmail;
   }
   await incrementCounter('payments:success');
 
@@ -366,14 +486,13 @@ async function processWebhookEvent(
 
       const razorpayPaymentId = entity['id']       as string;
       const razorpayOrderId   = entity['order_id'] as string;
-      const amount            = (entity['amount']  as number) / 100; // paise → rupees
-
       if (!razorpayPaymentId || !razorpayOrderId) return;
 
       const payment = await Payment.findOne({ where: { razorpay_order_id: razorpayOrderId } });
       if (!payment || payment.status === PaymentGatewayStatus.CAPTURED) return;
 
-      const splits = calculateFeeSplit(amount);
+      const appointment = await Appointment.findByPk(payment.appointment_id, { attributes: ['consultation_fee'] });
+      const splits = calculateFeeSplit(Number(appointment?.consultation_fee ?? payment.amount));
       await sequelize.transaction(async (t) => {
         await payment.update(
           {
@@ -457,7 +576,7 @@ export async function getPaymentReceipt(
   }
 
   const appt = await Appointment.findByPk(payment.appointment_id, {
-    attributes: ['patient_id', 'doctor_id', 'hospital_id', 'scheduled_at'],
+    attributes: ['patient_id', 'doctor_id', 'hospital_id', 'scheduled_at', 'consultation_fee'],
   });
   if (!appt) return fail('BOOKING_NOT_FOUND', 'Appointment not found.', 404);
   if (appt.patient_id !== patientId) return fail('AUTH_INSUFFICIENT_PERMISSIONS', 'Access denied.', 403);
@@ -474,6 +593,7 @@ export async function getPaymentReceipt(
   const invoiceDate   = new Date(capturedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
   const apptDate      = new Date(appt.scheduled_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   const invoiceNumber = `INV-${new Date(capturedAt).toISOString().slice(0, 10).replace(/-/g, '')}-${String(payment.appointment_id).slice(0, 8).toUpperCase()}`;
+  const charges       = calculatePaymentCharges(Number(appt.consultation_fee));
 
   const { generateReceiptPdf } = await import('../../utils/receiptPdf');
   const pdfBuffer = await generateReceiptPdf({
@@ -487,6 +607,7 @@ export async function getPaymentReceipt(
     txnId:           payment.razorpay_payment_id ?? '—',
     gstin:           env.COMPANY_GSTIN,
     address:         env.COMPANY_ADDRESS,
+    charges,
   });
 
   return ok(pdfBuffer);

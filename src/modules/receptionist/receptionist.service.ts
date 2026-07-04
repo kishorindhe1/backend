@@ -21,6 +21,7 @@ import { UserRole, AccountStatus, ProfileStatus, ServiceResponse, ok, fail } fro
 import { ErrorFactory }               from '../../utils/errors';
 import { enqueueNotification } from '../notifications/notification.service';
 import { invalidateQueueCache }       from '../queue/queue.service';
+import { sendReceiptEmailForAppointment } from '../payments/payment.service';
 import { logger }                     from '../../utils/logger';
 import { istDate }                    from '../../utils/dateTime';
 
@@ -143,6 +144,8 @@ export async function completeConsultation(
   await Appointment.update({ status: AppointmentStatus.COMPLETED }, { where: { id: appointmentId } });
   await updateAvgConsultationTime(entry.doctor_id, { ...entry.toJSON(), actual_end_at: now } as ConsultationQueue);
   await invalidateQueueCache(entry.doctor_id, entry.queue_date);
+  sendReceiptEmailForAppointment(appointmentId)
+    .catch((err) => logger.warn('Receipt email after receptionist completion failed', { appointmentId, err }));
 
   logger.info('Consultation completed', { appointmentId });
   return ok({ message: 'Consultation completed.', completed_at: now });

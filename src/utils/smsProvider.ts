@@ -1,7 +1,7 @@
 import * as admin  from 'firebase-admin';
 import * as fs      from 'fs';
 import * as path    from 'path';
-import { SESClient, SendEmailCommand }       from '@aws-sdk/client-ses';
+import { SESClient, SendEmailCommand, SendRawEmailCommand } from '@aws-sdk/client-ses';
 import { env }    from '../config/env';
 import { redis }   from '../config/redis';
 import { logger }  from './logger';
@@ -160,6 +160,66 @@ export async function sendEmail(
 
   const msgId = res.MessageId ?? `ses_${Date.now()}`;
   logger.info('SES email sent', { to, subject, msgId });
+  return { msgId };
+}
+
+export async function sendEmailWithAttachment(
+  to:       string,
+  subject:  string,
+  textBody: string,
+  htmlBody: string | undefined,
+  attachment: { filename: string; contentType: string; content: Buffer },
+): Promise<{ msgId: string }> {
+  if (env.NODE_ENV === 'development') {
+    logger.info(`📧  [DEV EMAIL → ${to}] ${subject}\n${textBody}\nAttachment: ${attachment.filename}`);
+    return { msgId: `email_dev_${Date.now()}` };
+  }
+
+  if (!env.AWS_SES_FROM_EMAIL) throw new Error('AWS_SES_FROM_EMAIL not configured');
+
+  const boundary = `upcharify_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const source = `${env.AWS_SES_FROM_NAME} <${env.AWS_SES_FROM_EMAIL}>`;
+  const encodedSubject = `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`;
+  const htmlPart = htmlBody
+    ? [
+        `--${boundary}`,
+        'Content-Type: text/html; charset=UTF-8',
+        'Content-Transfer-Encoding: 7bit',
+        '',
+        htmlBody,
+      ].join('\r\n')
+    : '';
+
+  const raw = [
+    `From: ${source}`,
+    `To: ${to}`,
+    `Subject: ${encodedSubject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 7bit',
+    '',
+    textBody,
+    htmlPart,
+    `--${boundary}`,
+    `Content-Type: ${attachment.contentType}; name="${attachment.filename}"`,
+    'Content-Transfer-Encoding: base64',
+    `Content-Disposition: attachment; filename="${attachment.filename}"`,
+    '',
+    attachment.content.toString('base64').replace(/(.{76})/g, '$1\r\n'),
+    `--${boundary}--`,
+    '',
+  ].filter(Boolean).join('\r\n');
+
+  const ses = getSesClient();
+  const res = await ses.send(new SendRawEmailCommand({
+    RawMessage: { Data: Buffer.from(raw) },
+  }));
+
+  const msgId = res.MessageId ?? `ses_${Date.now()}`;
+  logger.info('SES email with attachment sent', { to, subject, msgId, filename: attachment.filename });
   return { msgId };
 }
 

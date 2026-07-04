@@ -84,6 +84,14 @@ async function downloadReceipt(req: Request, res: Response): Promise<void> {
   res.send(result.data);
 }
 
+async function resendReceipt(req: Request, res: Response): Promise<void> {
+  const user      = req.user as JwtAccessPayload;
+  const paymentId = req.params.paymentId;
+  const result    = await PaymentService.resendReceiptEmail(paymentId, user.sub);
+  if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+  sendSuccess(res, result.data);
+}
+
 async function paymentHistory(req: Request, res: Response): Promise<void> {
   const user     = req.user as JwtAccessPayload;
   const page     = Math.max(1, parseInt(String(req.query.page     ?? 1)));
@@ -98,6 +106,7 @@ const router = Router();
 
 router.get ('/history',              authenticate, asyncHandler(paymentHistory));
 router.get ('/:paymentId/receipt',  authenticate, validate(ReceiptParamSchema), asyncHandler(downloadReceipt));
+router.post('/:paymentId/receipt/resend', authenticate, validate(ReceiptParamSchema), asyncHandler(resendReceipt));
 router.post('/initiate',   authenticate, idempotency, validate(InitiateSchema), asyncHandler(initiatePayment));
 router.post('/verify',     authenticate, idempotency, validate(VerifySchema),   asyncHandler(verifyPayment));
 router.post('/refund',     authenticate, validate(z.object({ body: z.object({ appointment_id: z.string().uuid() }) })), asyncHandler(refundPayment));

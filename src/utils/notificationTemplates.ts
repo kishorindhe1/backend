@@ -473,6 +473,13 @@ export interface InvoiceData {
   txnId:           string
   gstin?:          string
   address?:        string
+  charges?: {
+    consultation_fee: number
+    platform_fee: number
+    payment_gateway_fee: number
+    gst_on_gateway_fee: number
+    total_amount: number
+  }
 }
 
 export function gstInvoiceSubject(invoiceNumber: string): string {
@@ -482,6 +489,14 @@ export function gstInvoiceSubject(invoiceNumber: string): string {
 export function buildGstInvoiceHtml(d: InvoiceData): string {
   const gstinRow  = d.gstin   ? `<tr><td style="padding:6px 0;font-size:12px;color:#6b7280;width:45%;">Supplier GSTIN</td><td style="padding:6px 0;font-size:12px;color:#111827;font-weight:600;">${d.gstin}</td></tr>` : '';
   const addrRow   = d.address ? `<tr><td style="padding:6px 0;font-size:12px;color:#6b7280;">Address</td><td style="padding:6px 0;font-size:12px;color:#374151;">${d.address}</td></tr>` : '';
+  const charges = d.charges ?? {
+    consultation_fee: d.amount,
+    platform_fee: 0,
+    payment_gateway_fee: 0,
+    gst_on_gateway_fee: 0,
+    total_amount: d.amount,
+  };
+  const money = (amount: number) => `&#8377;${amount.toFixed(2)}`;
 
   return layout(
     `Tax Invoice ${d.invoiceNumber}`,
@@ -534,13 +549,31 @@ export function buildGstInvoiceHtml(d: InvoiceData): string {
           <td style="padding:12px 14px;font-size:13px;border-top:1px solid #f3f4f6;">
             <span style="background:#dcfce7;color:#15803d;font-size:11px;font-weight:600;padding:2px 8px;border-radius:9999px;">Exempt</span>
           </td>
-          <td style="padding:12px 14px;font-size:13px;font-weight:600;color:#111827;text-align:right;border-top:1px solid #f3f4f6;">&#8377;${d.amount.toFixed(2)}</td>
+          <td style="padding:12px 14px;font-size:13px;font-weight:600;color:#111827;text-align:right;border-top:1px solid #f3f4f6;">${money(charges.consultation_fee)}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;font-size:13px;color:#111827;border-top:1px solid #f3f4f6;">Platform Fee</td>
+          <td style="padding:10px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">—</td>
+          <td style="padding:10px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">—</td>
+          <td style="padding:10px 14px;font-size:13px;font-weight:600;color:#111827;text-align:right;border-top:1px solid #f3f4f6;">${money(charges.platform_fee)}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;font-size:13px;color:#111827;border-top:1px solid #f3f4f6;">Payment Gateway Fee 2%</td>
+          <td style="padding:10px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">—</td>
+          <td style="padding:10px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">Taxable</td>
+          <td style="padding:10px 14px;font-size:13px;font-weight:600;color:#111827;text-align:right;border-top:1px solid #f3f4f6;">${money(charges.payment_gateway_fee)}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;font-size:13px;color:#111827;border-top:1px solid #f3f4f6;">GST on Gateway Fee 18%</td>
+          <td style="padding:10px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">—</td>
+          <td style="padding:10px 14px;font-size:13px;color:#6b7280;border-top:1px solid #f3f4f6;">18%</td>
+          <td style="padding:10px 14px;font-size:13px;font-weight:600;color:#111827;text-align:right;border-top:1px solid #f3f4f6;">${money(charges.gst_on_gateway_fee)}</td>
         </tr>
       </tbody>
       <tfoot>
         <tr style="background:#f9fafb;">
           <td colspan="3" style="padding:12px 14px;font-size:14px;font-weight:700;color:#111827;text-align:right;border-top:1px solid #e5e7eb;">Total Paid</td>
-          <td style="padding:12px 14px;font-size:15px;font-weight:800;color:${BRAND.color};text-align:right;border-top:1px solid #e5e7eb;">&#8377;${d.amount.toFixed(2)}</td>
+          <td style="padding:12px 14px;font-size:15px;font-weight:800;color:${BRAND.color};text-align:right;border-top:1px solid #e5e7eb;">${money(charges.total_amount)}</td>
         </tr>
       </tfoot>
     </table>

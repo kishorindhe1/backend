@@ -60,6 +60,8 @@ const envSchema = z.object({
 
   // Platform fee
   PLATFORM_FEE_PERCENTAGE:   z.string().default('2').transform(Number),
+  PAYMENT_GATEWAY_FEE_PERCENTAGE: z.string().default('2').transform(Number),
+  PAYMENT_GATEWAY_GST_PERCENTAGE: z.string().default('18').transform(Number),
 
   // Cancellation policy: minimum hours before appointment for refund eligibility
   REFUND_WINDOW_HOURS: z.string().default('2').transform(Number),

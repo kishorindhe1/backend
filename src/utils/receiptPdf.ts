@@ -14,6 +14,13 @@ export function generateReceiptPdf(d: InvoiceData): Promise<Buffer> {
     doc.on('data',  (c: Buffer) => chunks.push(c));
     doc.on('end',   ()          => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
+    const charges = d.charges ?? {
+      consultation_fee: d.amount,
+      platform_fee: 0,
+      payment_gateway_fee: 0,
+      gst_on_gateway_fee: 0,
+      total_amount: d.amount,
+    };
 
     // ── Header ────────────────────────────────────────────────────────────────
     doc.fontSize(22).font('Helvetica-Bold').fillColor(DARK).text('TAX INVOICE', 50, 50);
@@ -58,7 +65,7 @@ export function generateReceiptPdf(d: InvoiceData): Promise<Buffer> {
          .text(label, x, tY + 8, { width: w, align, characterSpacing: 0.3 });
     });
 
-    // Data row
+    // Data rows
     const rY = tY + 30;
     doc.fontSize(12).font('Helvetica').fillColor(DARK).text('Medical Consultation', 60, rY);
     doc.fontSize(10).fillColor(GRAY)
@@ -73,16 +80,29 @@ export function generateReceiptPdf(d: InvoiceData): Promise<Buffer> {
        .text('Exempt', 369, rY + 15, { width: 50, align: 'center' });
 
     doc.fontSize(12).font('Helvetica-Bold').fillColor(DARK)
-       .text(`Rs.${d.amount.toFixed(2)}`, 440, rY + 16, { width: 100, align: 'right' });
+       .text(`Rs.${charges.consultation_fee.toFixed(2)}`, 440, rY + 16, { width: 100, align: 'right' });
+
+    const chargeRows: [string, string][] = [
+      ['Platform Fee', `Rs.${charges.platform_fee.toFixed(2)}`],
+      ['Payment Gateway Fee 2%', `Rs.${charges.payment_gateway_fee.toFixed(2)}`],
+      ['GST on Gateway Fee 18%', `Rs.${charges.gst_on_gateway_fee.toFixed(2)}`],
+    ];
+    chargeRows.forEach(([label, amount], i) => {
+      const y = rY + 58 + i * 22;
+      doc.fontSize(11).font('Helvetica').fillColor(DARK).text(label, 60, y);
+      doc.fontSize(10).fillColor(GRAY).text('-', 310, y, { width: 50 });
+      doc.fontSize(10).fillColor(GRAY).text(i === 2 ? '18%' : '-', 370, y, { width: 60 });
+      doc.fontSize(11).font('Helvetica-Bold').fillColor(DARK).text(amount, 440, y, { width: 100, align: 'right' });
+    });
 
     // ── Total row ─────────────────────────────────────────────────────────────
-    const totY = rY + 65;
+    const totY = rY + 130;
     doc.moveTo(50, totY).lineTo(545, totY).strokeColor('#e5e7eb').lineWidth(1).stroke();
     doc.rect(50, totY, 495, 34).fill('#f9fafb');
     doc.fontSize(12).font('Helvetica-Bold').fillColor(DARK)
        .text('Total Paid', 60, totY + 10);
     doc.fontSize(14).fillColor(PRIMARY)
-       .text(`Rs.${d.amount.toFixed(2)}`, 440, totY + 9, { width: 100, align: 'right' });
+       .text(`Rs.${charges.total_amount.toFixed(2)}`, 440, totY + 9, { width: 100, align: 'right' });
 
     // ── Transaction details ───────────────────────────────────────────────────
     const txnY = totY + 52;

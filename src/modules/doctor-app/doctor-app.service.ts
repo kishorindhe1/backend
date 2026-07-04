@@ -15,6 +15,7 @@ import { enqueueNotification }             from '../notifications/notification.s
 import { NotificationChannel }             from '../../models';
 import { istDate }                         from '../../utils/dateTime';
 import { emit, OpdRooms, OpdEvents }       from '../../config/socket';
+import { sendReceiptEmailForAppointment }  from '../payments/payment.service';
 
 const JS_DAY_TO_ENUM: DayOfWeek[] = [
   DayOfWeek.SUNDAY, DayOfWeek.MONDAY, DayOfWeek.TUESDAY,
@@ -72,6 +73,9 @@ export async function markConsultationDone(
       data:          { doctor: (apptForReview as any).doctor?.full_name ?? 'Doctor' },
     }).catch(() => {});
   }
+
+  sendReceiptEmailForAppointment(appointmentId)
+    .catch((err) => logger.warn('Receipt email after doctor completion failed', { appointmentId, err }));
 
   logger.info('Consultation marked done', { appointmentId, doctorId, durationMin });
   return ok({ duration_minutes: durationMin });
