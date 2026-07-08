@@ -22,6 +22,13 @@ export enum VerificationStatus {
   REJECTED = 'rejected',
 }
 
+export enum DoctorInviteStatus {
+  PENDING_INVITE = 'pending_invite',
+  ACCEPTED       = 'accepted',
+  EXPIRED        = 'expired',
+  REVOKED        = 'revoked',
+}
+
 export class DoctorProfile extends Model<
   InferAttributes<DoctorProfile>,
   InferCreationAttributes<DoctorProfile>
@@ -44,6 +51,13 @@ export class DoctorProfile extends Model<
   declare verification_status:     CreationOptional<VerificationStatus>;
   declare verified_at:             Date | null;
   declare verified_by:             string | null;
+
+  // Workspace invite lifecycle
+  declare invite_status:      DoctorInviteStatus | null;
+  declare invite_token_hash:  string | null;
+  declare invite_expires_at:  Date | null;
+  declare invite_accepted_at: Date | null;
+  declare invite_sent_at:     Date | null;
 
   // OPD config
   declare default_booking_mode:     CreationOptional<BookingMode>;
@@ -105,6 +119,16 @@ DoctorProfile.init(
     verified_at: { type: DataTypes.DATE, allowNull: true },
     verified_by: { type: DataTypes.UUID, allowNull: true },
 
+    invite_status: {
+      type: DataTypes.ENUM(...Object.values(DoctorInviteStatus)),
+      allowNull: true,
+      defaultValue: null,
+    },
+    invite_token_hash:  { type: DataTypes.STRING(255), allowNull: true },
+    invite_expires_at:  { type: DataTypes.DATE, allowNull: true },
+    invite_accepted_at: { type: DataTypes.DATE, allowNull: true },
+    invite_sent_at:     { type: DataTypes.DATE, allowNull: true },
+
     default_booking_mode: {
       type: DataTypes.ENUM(...Object.values(BookingMode)),
       allowNull: false, defaultValue: BookingMode.SLOT_BASED,
@@ -146,7 +170,7 @@ DoctorProfile.init(
       { fields: ['user_id'] },
       { fields: ['specialization'] },
       { fields: ['verification_status'] },
+      { fields: ['invite_status'] },
     ],
   },
 );
-

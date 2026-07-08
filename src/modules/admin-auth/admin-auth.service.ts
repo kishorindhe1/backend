@@ -1,6 +1,6 @@
 import { env }                        from '../../config/env';
 import { redis, RedisKeys, RedisTTL } from '../../config/redis';
-import { User, HospitalStaff, DoctorHospitalAffiliation } from '../../models';
+import { User, HospitalStaff, DoctorHospitalAffiliation, DoctorProfile } from '../../models';
 import { generateOTP, hashOTP, verifyOTP, hashPassword, verifyPassword, addMinutes } from '../../utils/helpers';
 import {
   issueTokenPair, storeRefreshToken, blacklistToken, invalidateRefreshToken, TokenPair,
@@ -21,7 +21,7 @@ export interface AdminLoginResult {
 
 export interface AdminTwoFactorResult {
   tokens: TokenPair;
-  user: { id: string; email: string; role: UserRole; account_status: AccountStatus; };
+  user: { id: string; email: string; role: UserRole; account_status: AccountStatus; doctor_id?: string; hospital_id?: string; };
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -135,6 +135,7 @@ export async function verifyAdminTwoFactor(email: string, otp: string): Promise<
 
   // Resolve hospital_id for hospital_admin / receptionist / doctor
   let hospitalId: string | undefined;
+  let doctorId: string | undefined;
   if (user.role === UserRole.HOSPITAL_ADMIN || user.role === UserRole.RECEPTIONIST) {
     const staffRecord = await HospitalStaff.findOne({
       where: { user_id: user.id, is_active: true },
@@ -142,20 +143,24 @@ export async function verifyAdminTwoFactor(email: string, otp: string): Promise<
     });
     hospitalId = staffRecord?.hospital_id ?? undefined;
   } else if (user.role === UserRole.DOCTOR) {
-    const affiliation = await DoctorHospitalAffiliation.findOne({
-      where: { doctor_id: user.id, is_primary: true, is_active: true },
-    }) ?? await DoctorHospitalAffiliation.findOne({
-      where: { doctor_id: user.id, is_active: true },
-      order: [['created_at', 'ASC']],
-    });
-    hospitalId = affiliation?.hospital_id ?? undefined;
+    const doctor = await DoctorProfile.findOne({ where: { user_id: user.id } });
+    doctorId = doctor?.id ?? undefined;
+    if (doctorId) {
+      const affiliation = await DoctorHospitalAffiliation.findOne({
+        where: { doctor_id: doctorId, is_primary: true, is_active: true },
+      }) ?? await DoctorHospitalAffiliation.findOne({
+        where: { doctor_id: doctorId, is_active: true },
+        order: [['created_at', 'ASC']],
+      });
+      hospitalId = affiliation?.hospital_id ?? undefined;
+    }
   }
 
-  const tokens = issueTokenPair({ userId: user.id, role: user.role, accountStatus: user.account_status, hospitalId });
+  const tokens = issueTokenPair({ userId: user.id, role: user.role, accountStatus: user.account_status, hospitalId, doctorId });
   await storeRefreshToken(user.id, tokens.refresh_token);
 
   logger.info('Admin logged in', { userId: user.id, email: maskEmail(email), role: user.role });
-  return ok({ tokens, user: { id: user.id, email, role: user.role, account_status: user.account_status } });
+  return ok({ tokens, user: { id: user.id, email, role: user.role, account_status: user.account_status, doctor_id: doctorId, hospital_id: hospitalId } });
 }
 
 // ─── Accept hospital invite (set password via email invite link) ──────────────

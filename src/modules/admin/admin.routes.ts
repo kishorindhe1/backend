@@ -1,5 +1,6 @@
 import { Router, Request, Response }     from 'express';
 import * as AdminService                  from './admin.service';
+import * as DoctorAuthService             from '../doctor-auth/doctor-auth.service';
 import { authenticate, requireRole }      from '../../middlewares/auth.middleware';
 import { requirePermission, scopedHospitalId, Permission } from '../../middlewares/permission.middleware';
 import { validate }                       from '../../middlewares/validate.middleware';
@@ -16,6 +17,7 @@ const param = (req: Request, k: string) => String((req.params as Record<string, 
 const qs    = (req: Request, k: string, d = '') => String((req.query  as Record<string, string>)[k] ?? d);
 const page  = (req: Request) => Math.max(1, parseInt(qs(req, 'page', '1'), 10));
 const perPg = (req: Request) => Math.min(100, Math.max(1, parseInt(qs(req, 'per_page', '20'), 10)));
+const boolQs = (req: Request, k: string) => ['1', 'true', 'yes'].includes(qs(req, k).toLowerCase());
 
 // ── Validation schemas ────────────────────────────────────────────────────────
 const ToggleDoctorSchema = z.object({
@@ -118,6 +120,26 @@ router.get('/doctors',
   }),
 );
 
+router.post('/doctors/:id/resend-invite',
+  requirePermission(Permission.DOCTORS_READ),
+  validate(UuidParamSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await DoctorAuthService.resendDoctorInvite(param(req, 'id'), scopedHospitalId(req));
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
+router.post('/doctors/:id/revoke-invite',
+  requirePermission(Permission.DOCTORS_READ),
+  validate(UuidParamSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const result = await DoctorAuthService.revokeDoctorInvite(param(req, 'id'), scopedHospitalId(req));
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    sendSuccess(res, result.data);
+  }),
+);
+
 // Appointments list — scoped for HOSPITAL_ADMIN
 router.get('/appointments',
   requirePermission(Permission.APPOINTMENTS_READ),
@@ -130,6 +152,9 @@ router.get('/appointments',
       patient_id:  qs(req, 'patient_id') || undefined,
       status:      qs(req, 'status') || undefined,
       date:        qs(req, 'date') || undefined,
+      search:      qs(req, 'search') || qs(req, 'q') || undefined,
+      payment_status: qs(req, 'payment_status') || qs(req, 'payment') || undefined,
+      stale_only:  boolQs(req, 'stale_only') || boolQs(req, 'stale'),
       page:  page(req),
       perPage: perPg(req),
     });
@@ -482,6 +507,25 @@ router.patch('/patients/:id/status',
 );
 
 // Pending approval count — badge indicator for sidebar nav
+router.get('/pending-approvals',
+  requirePermission(Permission.APPOINTMENTS_READ),
+  asyncHandler(async (req: Request, res: Response) => {
+    const scopeId = scopedHospitalId(req);
+    const result  = await AdminService.listPendingApprovals({
+      hospital_id:     scopeId ?? (qs(req, 'hospital_id') || undefined),
+      search:          qs(req, 'search') || qs(req, 'q') || undefined,
+      date:            qs(req, 'date') || undefined,
+      payment_status:  qs(req, 'payment_status') || qs(req, 'payment') || undefined,
+      stale_only:      boolQs(req, 'stale_only') || boolQs(req, 'stale'),
+      page:            page(req),
+      perPage:         perPg(req),
+    });
+    if (!result.success) { sendError(res, result.statusCode, { code: result.code, message: result.message }); return; }
+    const d = result.data as { rows: object[]; count: number };
+    sendSuccess(res, d.rows, 200, { total: d.count, page: page(req), per_page: perPg(req), total_pages: Math.ceil(d.count / perPg(req)) });
+  }),
+);
+
 router.get('/pending-approvals/count',
   requirePermission(Permission.APPOINTMENTS_READ),
   asyncHandler(async (req: Request, res: Response) => {

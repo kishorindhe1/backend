@@ -18,10 +18,11 @@ interface IssueTokenParams {
   accountStatus: AccountStatus;
   profileStatus?: ProfileStatus;
   hospitalId?: string;
+  doctorId?: string;
 }
 
 export function issueTokenPair(params: IssueTokenParams): TokenPair {
-  const { userId, role, accountStatus, profileStatus, hospitalId } = params;
+  const { userId, role, accountStatus, profileStatus, hospitalId, doctorId } = params;
 
   const accessJti  = uuidv4();
   const refreshJti = uuidv4();
@@ -33,6 +34,7 @@ export function issueTokenPair(params: IssueTokenParams): TokenPair {
     account_status: accountStatus,
     ...(profileStatus  && { profile_status: profileStatus }),
     ...(hospitalId     && { hospital_id: hospitalId }),
+    ...(doctorId       && { doctor_id: doctorId }),
   };
 
   const refreshPayload: Omit<JwtRefreshPayload, 'iat' | 'exp'> = {

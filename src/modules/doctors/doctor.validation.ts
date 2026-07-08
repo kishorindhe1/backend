@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const CreateDoctorSchema = z.object({
   body: z.object({
     mobile:               z.string().regex(/^[6-9]\d{9}$/, 'Valid 10-digit mobile required'),
+    email:                z.string().email('Valid email required'),
     full_name:            z.string().trim().min(2).max(100),
     specialization:       z.string().trim().min(2).max(100),
     qualifications:       z.array(z.string()).min(1, 'At least one qualification required'),

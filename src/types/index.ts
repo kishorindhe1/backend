@@ -29,6 +29,7 @@ export interface JwtAccessPayload {
   account_status: AccountStatus;
   profile_status?: ProfileStatus;
   hospital_id?:   string;
+  doctor_id?:     string;
   iat:            number;
   exp:            number;
 }

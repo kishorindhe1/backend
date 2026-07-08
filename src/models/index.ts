@@ -23,7 +23,7 @@ export { Hospital, HospitalType, OnboardingStatus, AppointmentApprovalMode, Paym
 export { PatientProfile, Gender }      from './patient.model';
 export { HospitalStaff, StaffRole }    from './hospital-staff.model';
 export {
-  DoctorProfile, BookingMode, BreakType, VerificationStatus,
+  DoctorProfile, BookingMode, BreakType, VerificationStatus, DoctorInviteStatus,
 }                                      from './doctor.model';
 export { PatientDoctorDuration, DurationSetByRole }        from './patient-doctor-duration.model';
 export { PatientDoctorDurationHistory }                    from './patient-doctor-duration-history.model';

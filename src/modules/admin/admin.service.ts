@@ -537,31 +537,94 @@ export async function listAppointments(filters: {
   patient_id?:  string;
   status?:      string;
   date?:        string;   // YYYY-MM-DD
+  search?:      string;
+  payment_status?: string;
+  stale_only?:  boolean;
   page:         number;
   perPage:      number;
 }): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
-  const where: Record<string, unknown> = {};
+  const where: any = {};
   if (filters.hospital_id) where.hospital_id = filters.hospital_id;
   if (filters.doctor_id)   where.doctor_id   = filters.doctor_id;
   if (filters.patient_id)  where.patient_id  = filters.patient_id;
-  if (filters.status)      where.status      = filters.status;
+  if (filters.status)      where.status      = normalizeAppointmentStatus(filters.status);
+  const paymentStatus = normalizePaymentStatus(filters.payment_status);
+  if (paymentStatus) where.payment_status = paymentStatus;
+  if (filters.stale_only) {
+    where.created_at = { [Op.lt]: new Date(Date.now() - 2 * 60 * 60_000) };
+  }
   if (filters.date) {
     const start = new Date(filters.date);
     const end   = new Date(filters.date);
     end.setDate(end.getDate() + 1);
     where.scheduled_at = { [Op.gte]: start, [Op.lt]: end };
   }
+  if (filters.search?.trim()) {
+    const term = `%${filters.search.trim()}%`;
+    where[Op.or] = [
+      { '$doctor.full_name$': { [Op.iLike]: term } },
+      { '$doctor.specialization$': { [Op.iLike]: term } },
+      { '$patient.mobile$': { [Op.iLike]: term } },
+      { '$patient.patientProfile.full_name$': { [Op.iLike]: term } },
+    ];
+  }
 
   const { rows, count } = await Appointment.findAndCountAll({
     where,
     include: [
       { model: DoctorProfile, as: 'doctor', attributes: ['full_name', 'specialization'] },
-      { model: User,          as: 'patient', attributes: ['mobile'] },
+      {
+        model: User, as: 'patient', attributes: ['id', 'mobile'],
+        include: [{ model: PatientProfile, as: 'patientProfile', attributes: ['full_name'], required: false }],
+      },
     ],
     order: [['scheduled_at', 'DESC']],
     limit: filters.perPage, offset: (filters.page - 1) * filters.perPage,
+    distinct: true,
   });
   return ok({ rows, count });
+}
+
+export async function listPendingApprovals(filters: {
+  hospital_id?: string;
+  search?: string;
+  date?: string;
+  payment_status?: string;
+  stale_only?: boolean;
+  page: number;
+  perPage: number;
+}): Promise<ServiceResponse<{ rows: object[]; count: number }>> {
+  return listAppointments({
+    ...filters,
+    status: AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
+  });
+}
+
+function normalizeAppointmentStatus(status: string): string {
+  const value = status.trim().toLowerCase();
+  const aliases: Record<string, AppointmentStatus> = {
+    awaiting_approval: AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
+    pending_approval: AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
+    pending_approvals: AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
+    awaiting_hospital_approval: AppointmentStatus.AWAITING_HOSPITAL_APPROVAL,
+  };
+  return aliases[value] ?? status;
+}
+
+function normalizePaymentStatus(status?: string): PaymentStatus | undefined {
+  if (!status) return undefined;
+  const value = status.trim().toLowerCase();
+  if (!value || value === 'all' || value === 'all_payments') return undefined;
+  const aliases: Record<string, PaymentStatus> = {
+    paid: PaymentStatus.CAPTURED,
+    captured: PaymentStatus.CAPTURED,
+    unpaid: PaymentStatus.PENDING,
+    pending: PaymentStatus.PENDING,
+    failed: PaymentStatus.FAILED,
+    refunded: PaymentStatus.REFUNDED,
+    refund_pending: PaymentStatus.REFUND_PENDING,
+  };
+  return aliases[value];
 }
 
 // ── Send appointment reminder push notification ───────────────────────────────

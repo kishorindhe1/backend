@@ -13,6 +13,7 @@ import { istDate }           from '../../utils/dateTime';
 // ── Register doctor and affiliate to a hospital ───────────────────────────────
 export interface RegisterDoctorInput {
   mobile:               string;
+  email:                string;
   full_name:            string;
   specialization:       string;
   qualifications:       string[];
@@ -32,6 +33,11 @@ export async function registerDoctor(
   const hospital = await Hospital.findByPk(input.hospital_id);
   if (!hospital) return fail('HOSPITAL_NOT_FOUND', 'Hospital not found.', 404);
 
+  const existingEmail = await User.findOne({ where: { email: input.email } });
+  if (existingEmail && existingEmail.mobile !== input.mobile) {
+    return fail('EMAIL_ALREADY_EXISTS', 'This email is already used by another account.', 409);
+  }
+
   // Check if mobile already exists
   const existing = await User.findOne({ where: { mobile: input.mobile } });
   let userId: string;
@@ -40,11 +46,17 @@ export async function registerDoctor(
     if (existing.role !== UserRole.DOCTOR) {
       return fail('USER_ROLE_CONFLICT', 'This mobile is registered with a different role.', 409);
     }
+    if (!existing.email) {
+      await existing.update({ email: input.email });
+    } else if (existing.email !== input.email) {
+      return fail('EMAIL_MISMATCH', 'This doctor mobile is already linked to a different email.', 409);
+    }
     userId = existing.id;
   } else {
     // Create user record
     const user = await User.create({
       mobile:         input.mobile,
+      email:          input.email,
       country_code:   '+91',
       role:           UserRole.DOCTOR,
       account_status: AccountStatus.ACTIVE,
