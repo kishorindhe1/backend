@@ -15,6 +15,7 @@ import {
   OpdSlotSession, OpdSlotStatus,
   DoctorDelayEvent, DelayStatus,
   NotificationLog, NotificationStatus,
+  UserNotificationPreference,
   AdminAuditLog, AdminAction,
 }                                       from '../../models';
 import { UserRole, AccountStatus } from '../../types';
@@ -650,14 +651,26 @@ export async function sendAppointmentReminder(
   const doctor   = (appt as any).doctor   as DoctorProfile;
   const hospital = (appt as any).hospital as Hospital;
 
+  const pref = await UserNotificationPreference.findOne({ where: { user_id: patient.id } });
+  if (!pref?.fcm_token) {
+    return fail(
+      'PUSH_TOKEN_MISSING',
+      'Patient app has not registered a push notification token. Ask the patient to open the app and allow notifications.',
+      409,
+    );
+  }
+  if (!pref.push_enabled) {
+    return fail('PUSH_DISABLED', 'Patient has disabled push notifications.', 409);
+  }
+
   const scheduledAt  = new Date(appt.scheduled_at);
   const hoursUntil   = Math.max(0, Math.round((scheduledAt.getTime() - Date.now()) / 3_600_000));
 
   await enqueueNotification({
     userId:        patient.id,
     type:          'appointment_reminder',
-    channels:      [NotificationChannel.PUSH, NotificationChannel.SMS],
-    priority:      'high',
+    channels:      [NotificationChannel.PUSH],
+    priority:      'critical',
     appointmentId,
     data: {
       mobile:   `+91${patient.mobile}`,
@@ -672,7 +685,7 @@ export async function sendAppointmentReminder(
   });
 
   logger.info('Admin triggered appointment reminder', { appointmentId, adminId });
-  return ok({ message: 'Reminder sent successfully.' });
+  return ok({ message: 'Reminder push queued successfully.' });
 }
 
 // ── Scoped financial summary (with optional hospital scope) ───────────────────
