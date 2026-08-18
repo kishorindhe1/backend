@@ -1,6 +1,6 @@
 import { env }                        from '../../config/env';
 import { redis, RedisKeys, RedisTTL } from '../../config/redis';
-import { User, HospitalStaff, DoctorHospitalAffiliation, DoctorProfile } from '../../models';
+import { User, Hospital, HospitalStaff, DoctorHospitalAffiliation, DoctorProfile } from '../../models';
 import { generateOTP, hashOTP, verifyOTP, hashPassword, verifyPassword, addMinutes } from '../../utils/helpers';
 import {
   issueTokenPair, storeRefreshToken, blacklistToken, invalidateRefreshToken, TokenPair,
@@ -50,6 +50,58 @@ async function sendTfaOtpEmail(email: string, otp: string): Promise<void> {
 }
 
 // ─── service functions ────────────────────────────────────────────────────────
+
+async function resolveAdminScope(user: User): Promise<{ hospitalId?: string; hospitalName?: string | null; doctorId?: string }> {
+  let hospitalId: string | undefined;
+  let doctorId: string | undefined;
+
+  if (user.role === UserRole.HOSPITAL_ADMIN || user.role === UserRole.RECEPTIONIST) {
+    const staffRecord = await HospitalStaff.findOne({
+      where: { user_id: user.id, is_active: true },
+      order: [['created_at', 'DESC']],
+    });
+    hospitalId = staffRecord?.hospital_id ?? undefined;
+  } else if (user.role === UserRole.DOCTOR) {
+    const doctor = await DoctorProfile.findOne({ where: { user_id: user.id } });
+    doctorId = doctor?.id ?? undefined;
+    if (doctorId) {
+      const affiliation = await DoctorHospitalAffiliation.findOne({
+        where: { doctor_id: doctorId, is_primary: true, is_active: true },
+      }) ?? await DoctorHospitalAffiliation.findOne({
+        where: { doctor_id: doctorId, is_active: true },
+        order: [['created_at', 'ASC']],
+      });
+      hospitalId = affiliation?.hospital_id ?? undefined;
+    }
+  }
+
+  const hospital = hospitalId ? await Hospital.findByPk(hospitalId, { attributes: ['name'] }) : null;
+  return { hospitalId, hospitalName: hospital?.name ?? null, doctorId };
+}
+
+export async function getAdminMe(userId: string): Promise<ServiceResponse<object>> {
+  const user = await User.findByPk(userId, {
+    attributes: ['id', 'email', 'mobile', 'country_code', 'role', 'account_status', 'last_login_at', 'created_at'],
+  });
+
+  if (!user || !ADMIN_ROLES.includes(user.role)) {
+    return fail('ADMIN_NOT_FOUND', 'Admin account not found.', 404);
+  }
+
+  const scope = await resolveAdminScope(user);
+  return ok({
+    id: user.id,
+    email: user.email,
+    mobile: user.country_code ? `${user.country_code}${user.mobile}` : user.mobile,
+    role: user.role,
+    account_status: user.account_status,
+    hospital_id: scope.hospitalId,
+    hospital_name: scope.hospitalName,
+    doctor_id: scope.doctorId,
+    last_login_at: user.last_login_at,
+    created_at: user.created_at,
+  });
+}
 
 export async function adminLogin(email: string, password: string): Promise<ServiceResponse<AdminLoginResult>> {
   const user = await User.findOne({ where: { email } });
@@ -133,34 +185,12 @@ export async function verifyAdminTwoFactor(email: string, otp: string): Promise<
   await user.update({ otp_secret: null, otp_expires_at: null, otp_attempts: 0, last_login_at: new Date() });
   await redis.del(RedisKeys.adminTfaCooldown(email));
 
-  // Resolve hospital_id for hospital_admin / receptionist / doctor
-  let hospitalId: string | undefined;
-  let doctorId: string | undefined;
-  if (user.role === UserRole.HOSPITAL_ADMIN || user.role === UserRole.RECEPTIONIST) {
-    const staffRecord = await HospitalStaff.findOne({
-      where: { user_id: user.id, is_active: true },
-      order: [['created_at', 'DESC']],
-    });
-    hospitalId = staffRecord?.hospital_id ?? undefined;
-  } else if (user.role === UserRole.DOCTOR) {
-    const doctor = await DoctorProfile.findOne({ where: { user_id: user.id } });
-    doctorId = doctor?.id ?? undefined;
-    if (doctorId) {
-      const affiliation = await DoctorHospitalAffiliation.findOne({
-        where: { doctor_id: doctorId, is_primary: true, is_active: true },
-      }) ?? await DoctorHospitalAffiliation.findOne({
-        where: { doctor_id: doctorId, is_active: true },
-        order: [['created_at', 'ASC']],
-      });
-      hospitalId = affiliation?.hospital_id ?? undefined;
-    }
-  }
-
-  const tokens = issueTokenPair({ userId: user.id, role: user.role, accountStatus: user.account_status, hospitalId, doctorId });
+  const scope = await resolveAdminScope(user);
+  const tokens = issueTokenPair({ userId: user.id, role: user.role, accountStatus: user.account_status, hospitalId: scope.hospitalId, doctorId: scope.doctorId });
   await storeRefreshToken(user.id, tokens.refresh_token);
 
   logger.info('Admin logged in', { userId: user.id, email: maskEmail(email), role: user.role });
-  return ok({ tokens, user: { id: user.id, email, role: user.role, account_status: user.account_status, doctor_id: doctorId, hospital_id: hospitalId } });
+  return ok({ tokens, user: { id: user.id, email, role: user.role, account_status: user.account_status, doctor_id: scope.doctorId, hospital_id: scope.hospitalId } });
 }
 
 // ─── Accept hospital invite (set password via email invite link) ──────────────

@@ -1,4 +1,6 @@
 import { Router }      from 'express';
+import { authenticate, requireRole } from '../../middlewares/auth.middleware';
+import { JwtAccessPayload, UserRole } from '../../types';
 import { z }           from 'zod';
 import { validate }    from '../../middlewares/validate.middleware';
 import { asyncHandler } from '../../utils/asyncHandler';
@@ -6,6 +8,20 @@ import { authRateLimiter } from '../../middlewares/rateLimit.middleware';
 import * as AdminAuthService from './admin-auth.service';
 
 const router = Router();
+
+router.get('/me',
+  authenticate,
+  requireRole(UserRole.SUPER_ADMIN, UserRole.HOSPITAL_ADMIN, UserRole.RECEPTIONIST, UserRole.DOCTOR),
+  asyncHandler(async (req, res) => {
+    const user = req.user as JwtAccessPayload;
+    const result = await AdminAuthService.getAdminMe(user.sub);
+    if (!result.success) {
+      res.status(result.statusCode).json({ success: false, error: { code: result.code, message: result.message } });
+      return;
+    }
+    res.json({ success: true, data: result.data });
+  }),
+);
 
 const LoginSchema = z.object({
   body: z.object({
